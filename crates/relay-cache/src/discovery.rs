@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MIT
+
+//! One-shot discovery of regional relay frontends from systemd unit files.
+//!
+//! Wraps `relay_coordinator::health::discover` so we get the same
+//! `--frontend-bind` / `--mirror-database` parsing the coordinator and
+//! `fleet-status.sh` already rely on. Filters out `global` (cross-region
+//! reference data, out of scope for the regional gameplay tables the
+//! cache serves).
+
+use std::path::Path;
+
+use anyhow::Result;
+
+/// One region frontend on the local host.
+#[derive(Debug, Clone)]
+pub struct DiscoveredRegion {
+    pub region: u32,
+    pub database: String,
+    pub frontend_port: u16,
+    /// Loopback dashboard port (`--dashboard-bind`) for `/metrics` polls.
+    pub dashboard_port: u16,
+}
+
+/// Walk `unit_dir` for `relay-bc<N>.service` units and return the
+/// regional mirrors. Skips `relay-global` and any source whose region
+/// number cannot be parsed (with a warn log).
+pub fn discover_regions(unit_dir: &Path) -> Result<Vec<DiscoveredRegion>> {
+    let sources = relay_coordinator::health::discover(
+        unit_dir,
+        // BitCraft's convention: `relay-bc14` → `bitcraft-live-14`.
+        &relay_coordinator::health::NamingSpec {
+            template: Some("bitcraft-live-{stem}".into()),
+            stem_prefix: Some("relay-bc".into()),
+        },
+    );
+    let mut out = Vec::with_capacity(sources.len());
+    for src in sources {
+        if src.name == "global" {
+            continue;
+        }
+        let Some(region) = parse_region_number(&src.name) else {
+            tracing::warn!(
+                target: "relay_cache::discovery",
+                name = %src.name,
+                "skipping source: cannot parse region number"
+            );
+            continue;
+        };
+        out.push(DiscoveredRegion {
+            region,
+            database: src.database,
+            frontend_port: src.frontend_port,
+            dashboard_port: src.dashboard_port,
+        });
+    }
+    Ok(out)
+}
+
+/// `"bitcraft-live-14"` → `Some(14)`.
+fn parse_region_number(name: &str) -> Option<u32> {
+    name.strip_prefix("bitcraft-live-")?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_region_from_source_name() {
+        assert_eq!(parse_region_number("bitcraft-live-14"), Some(14));
+        assert_eq!(parse_region_number("bitcraft-live-3"), Some(3));
+        assert_eq!(parse_region_number("global"), None);
+        assert_eq!(parse_region_number("bitcraft-live-"), None);
+        assert_eq!(parse_region_number("relay-bc14"), None);
+    }
+
+    #[test]
+    fn discover_forwards_dashboard_port() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("relay-bc14.service"),
+            "[Service]\n\
+             ExecStart=/relay \\\n\
+             --mirror-database relay-mirror-bc14 \\\n\
+             --frontend-bind 127.0.0.1:3014 \\\n\
+             --dashboard-bind 127.0.0.1:3114\n",
+        )
+        .unwrap();
+        let regions = discover_regions(dir.path()).unwrap();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].region, 14);
+        assert_eq!(regions[0].frontend_port, 3014);
+        assert_eq!(regions[0].dashboard_port, 3114);
+        assert_eq!(regions[0].database, "relay-mirror-bc14");
+    }
+}

@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscribe — relay tutorial</title>
+<link rel="stylesheet" href="css/tutorial.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">&larr; relay.bitcraftsync.app</a>
+    <h1>Tutorial</h1>
+    <div class="nav-group">Tools</div>
+    <nav>
+      <a href="/explorer/">Data explorer</a>
+    </nav>
+    <div class="nav-group">Guide</div>
+        <nav>
+      <a href="index.html">Overview</a>
+      <a href="connect.html">1. Connect</a>
+      <a href="subscribe.html">2. Subscribe</a>
+      <a href="schema.html">3. Discover schema</a>
+      <a href="players.html">4. Extract player data</a>
+      <a href="relay-cache.html">5. relay-cache joins</a>
+      <a href="troubleshoot.html">6. If it fails</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>2. Subscribe to tables</h1>
+    <p class="lede">
+      Once the connection greeting has arrived
+      (<a href="connect.html#initial-connection"><code>InitialConnection</code></a>
+      / SDK <code>onConnect</code>), send SQL subscriptions. Small filtered
+      sets can go in one shot. For BitCraft-scale full dumps, subscribe
+      <strong>one query set at a time</strong> and wait for Applied before
+      the next.
+    </p>
+
+    <div class="banner warn">
+      <b>Why sequencing matters.</b> A single set-replace covering hundreds
+      of BitCraft tables can produce a multi-hundred-MB Applied frame.
+      Some edges reset long transfers (~90&nbsp;s). Prefer filters, small
+      tables, or sequential additive sets. See
+      <a href="troubleshoot.html">If it fails</a> if a subscribe never
+      completes.
+    </div>
+
+    <h2 id="sql">What SQL is safe</h2>
+    <p>
+      Subscriptions are <strong>not</strong> arbitrary analytics SQL. Stick
+      to shapes SpacetimeDB accepts for live queries:
+    </p>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Use</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Full table</td>
+            <td class="mono">SELECT * FROM skill_desc</td>
+          </tr>
+          <tr>
+            <td>Equality / simple <code>WHERE</code></td>
+            <td class="mono">SELECT * FROM player_username_state WHERE username = 'Maplesugar'</td>
+          </tr>
+          <tr>
+            <td>PK / numeric filter</td>
+            <td class="mono">SELECT * FROM experience_state WHERE entity_id = 1297036692699996362</td>
+          </tr>
+          <tr>
+            <td>Inequality used by relay-cache</td>
+            <td class="mono">SELECT * FROM location_state WHERE dimension != 1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Prefer projecting only what you need when a table is huge
+      (<code>location_state</code>, inventories, footprints).
+      <strong>Etiquette:</strong> do not <code>SELECT * FROM location_state</code>
+      (or other multi-hundred-MB tables) from every client laptop — filter,
+      use the <a href="relay-cache.html">HTTP cache</a>, or run heavy
+      mirrors on a server. Fancy joins, aggregates, <code>ORDER BY</code>, or
+      <code>LIMIT</code> are either unsupported or a bad fit for subscriptions.
+      <code>OneOffQuery</code> is rejected by the relay.
+    </p>
+
+    <h2 id="one-shot">One-shot snapshot (no live stream)</h2>
+    <p>
+      Need a dump, not a long-lived cache? That is the usual substitute for
+      <code>OneOffQuery</code>:
+    </p>
+    <ol class="steps">
+      <li><strong>Connect</strong> and wait for the greeting (<code>InitialConnection</code> / <code>IdentityToken</code>).</li>
+      <li><strong>Subscribe</strong> with the smallest SQL that answers the question (filters help).</li>
+      <li><strong>Wait</strong> for Applied / <code>InitialSubscription</code>.</li>
+      <li><strong>Read</strong> rows from the Applied payload or SDK client cache.</li>
+      <li><strong>Close</strong> the WebSocket — you are done.</li>
+    </ol>
+    <p>
+      The Python v1.json examples on this page and
+      <a href="players.html">Players</a> do exactly that (connect → subscribe →
+      print → exit). Keep the socket open only if you need live
+      <code>TransactionUpdate</code>s afterward.
+    </p>
+
+    <h2>One table (or a few filtered rows)</h2>
+
+    <div class="code-switch">
+      <div class="lang-tabs">
+        <button type="button" class="active" data-lang="typescript">TypeScript</button>
+        <button type="button" data-lang="python">Python (v1.json)</button>
+        <button type="button" data-lang="rust">Rust</button>
+      </div>
+      <div class="code-panel active" data-lang="typescript">
+<pre><code>// npm i spacetimedb
+// spacetime generate --lang typescript -o src/module_bindings …
+import { DbConnection } from "./module_bindings";
+
+const conn = DbConnection.builder()
+  .withUri("wss://relay.bitcraftsync.app:3014")
+  .withDatabaseName("relay-mirror-bc14")
+  .onConnect((conn, identity, token) => {
+    console.log("connected", identity.toHexString(), "token_len", token.length);
+
+    conn
+      .subscriptionBuilder()
+      .onApplied((ctx) => {
+        // Generated accessor name follows the table; SQL string also works:
+        for (const row of ctx.db.playerUsernameState.iter()) {
+          console.log(row.entityId.toString(), row.username);
+        }
+      })
+      .onError((_ctx, err) => console.error("subscribe error", err))
+      .subscribe(["SELECT * FROM player_username_state WHERE username = 'Maplesugar'"]);
+  })
+  .onConnectError((_ctx, err) => console.error("connect error", err))
+  .build();</code></pre>
+      </div>
+      <div class="code-panel" data-lang="python">
+<pre><code>#!/usr/bin/env python3
+"""Runnable without a BSATN codec: v1.json text frames.
+   pip install websockets
+"""
+import asyncio
+import json
+import websockets
+
+HOST = "wss://relay.bitcraftsync.app:3014"
+DB = "relay-mirror-bc14"
+URL = f"{HOST}/v1/database/{DB}/subscribe?compression=None"
+SUBPROTOCOL = "v1.json.spacetimedb"
+
+async def recv_json(ws, timeout=120):
+    while True:
+        msg = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        if isinstance(msg, (bytes, bytearray)):
+            continue  # ignore pings framed as binary if any
+        return json.loads(msg)
+
+async def main():
+    async with websockets.connect(
+        URL, subprotocols=[SUBPROTOCOL], max_size=None
+    ) as ws:
+        greet = await recv_json(ws)
+        assert "IdentityToken" in greet, greet  # v1 name for InitialConnection
+        print("IdentityToken ok")
+
+        # v1 Subscribe is set-replace: one message can list several queries.
+        await ws.send(json.dumps({
+            "Subscribe": {
+                "request_id": 1,
+                "query_strings": [
+                    "SELECT * FROM player_username_state WHERE username = 'Maplesugar'",
+                ],
+            }
+        }))
+
+        applied = await recv_json(ws)
+        assert "InitialSubscription" in applied, applied
+        tables = applied["InitialSubscription"]["database_update"]["tables"]
+        for table in tables:
+            print(f"table={table['table_name']} rows={table['num_rows']}")
+            for upd in table["updates"]:
+                for raw in upd.get("inserts", []):
+                    # Each insert is a JSON *string* of the row object
+                    row = json.loads(raw) if isinstance(raw, str) else raw
+                    print(" ", row)
+                    # → {'entity_id': 1297036692699996362, 'username': 'Maplesugar'}
+
+asyncio.run(main())</code></pre>
+      </div>
+      <div class="code-panel" data-lang="rust">
+<pre><code>// Inside on_connect, after spacetime generate --lang rust
+ctx.subscription_builder()
+    .on_applied(|ctx| {
+        for row in ctx.db.player_username_state().iter().take(5) {
+            println!("entity_id={} username={}", row.entity_id, row.username);
+        }
+    })
+    .on_error(|_ctx, err| eprintln!("subscribe error: {err}"))
+    .subscribe(["SELECT * FROM player_username_state WHERE username = 'Maplesugar'"]);</code></pre>
+      </div>
+    </div>
+
+    <h2>Many tables — sequential Applied (runnable)</h2>
+    <p>
+      Rule: <strong>do not start the next subscribe until the previous
+      query set has applied</strong>. TypeScript and Rust SDKs support
+      additive subscriptions natively. Python below uses <strong>v1.json</strong>
+      with one Subscribe that lists several <em>small/filtered</em> queries
+      (set-replace once) — enough to join a single player without BSATN.
+      For huge full-table dumps from Python, use the HTTP cache or a
+      TS/Rust client.
+    </p>
+
+    <div class="diagram"><span class="hi">connect</span> / IdentityToken
+   │
+   ▼
+<span class="ok">Subscribe</span> set <em>i</em>
+   │  (apply any TransactionUpdate for earlier sets)
+   ▼
+<span class="ok">SubscribeApplied</span> / InitialSubscription
+   │
+   ▼
+next <em>i</em> … until done → <span class="hi">ready</span></div>
+
+    <div class="code-switch">
+      <div class="lang-tabs">
+        <button type="button" class="active" data-lang="typescript">TypeScript</button>
+        <button type="button" data-lang="rust">Rust</button>
+        <button type="button" data-lang="python">Python (v1.json multi-query)</button>
+      </div>
+      <div class="code-panel active" data-lang="typescript">
+<pre><code>import { DbConnection } from "./module_bindings";
+
+const QUERIES = [
+  "SELECT * FROM skill_desc",
+  "SELECT * FROM player_username_state WHERE username = 'Maplesugar'",
+  "SELECT * FROM player_state WHERE entity_id = 1297036692699996362",
+  "SELECT * FROM experience_state WHERE entity_id = 1297036692699996362",
+];
+
+function subscribeSequential(conn: DbConnection, i = 0) {
+  if (i >= QUERIES.length) {
+    console.log("all sequential subscriptions applied");
+    // read joined columns from conn.db … (see players.html)
+    return;
+  }
+  const sql = QUERIES[i];
+  console.log("subscribing", sql);
+  conn
+    .subscriptionBuilder()
+    .onApplied(() => {
+      console.log("SubscribeApplied", i, sql);
+      subscribeSequential(conn, i + 1);
+    })
+    .onError((_ctx, err) => console.error("subscribe error", err))
+    .subscribe(sql);
+}
+
+DbConnection.builder()
+  .withUri("wss://relay.bitcraftsync.app:3014")
+  .withDatabaseName("relay-mirror-bc14")
+  .onConnect((conn) => subscribeSequential(conn))
+  .onConnectError((_ctx, err) => console.error(err))
+  .build();</code></pre>
+      </div>
+      <div class="code-panel" data-lang="rust">
+<pre><code>use module_bindings::DbConnection;
+use spacetimedb_sdk::DbContext;
+use std::sync::Arc;
+
+const QUERIES: &amp;[&amp;str] = &amp;[
+    "SELECT * FROM skill_desc",
+    "SELECT * FROM player_username_state WHERE username = 'Maplesugar'",
+    "SELECT * FROM player_state WHERE entity_id = 1297036692699996362",
+    "SELECT * FROM experience_state WHERE entity_id = 1297036692699996362",
+];
+
+fn subscribe_at(ctx: &amp;impl DbContext, i: usize) {
+    if i &gt;= QUERIES.len() {
+        println!("all sequential subscriptions applied");
+        return;
+    }
+    let sql = QUERIES[i].to_string();
+    println!("subscribing {sql}");
+    ctx.subscription_builder()
+        .on_applied(move |ctx| {
+            println!("SubscribeApplied {i}");
+            subscribe_at(&amp;ctx, i + 1);
+        })
+        .on_error(|_ctx, err| eprintln!("subscribe error: {err}"))
+        .subscribe([sql]);
+}
+
+fn main() {
+    let _conn = DbConnection::builder()
+        .with_uri("wss://relay.bitcraftsync.app:3014")
+        .with_database_name("relay-mirror-bc14")
+        .on_connect(|ctx, _id, _token| subscribe_at(&amp;ctx, 0))
+        .build()
+        .expect("connect");
+    // keep process alive / tick the SDK runtime as your app requires
+}</code></pre>
+      </div>
+      <div class="code-panel" data-lang="python">
+<pre><code>#!/usr/bin/env python3
+"""One v1 Subscribe with several *filtered* queries — parses real columns.
+   For multi-GB full-table dumps, use TypeScript/Rust sequential instead.
+"""
+import asyncio, json, websockets
+
+URL = (
+    "wss://relay.bitcraftsync.app:3014"
+    "/v1/database/relay-mirror-bc14/subscribe?compression=None"
+)
+ENTITY = 1297036692699996362  # Maplesugar on region 14
+
+QUERIES = [
+    "SELECT * FROM skill_desc",
+    "SELECT * FROM player_username_state WHERE username = 'Maplesugar'",
+    f"SELECT * FROM player_state WHERE entity_id = {ENTITY}",
+    f"SELECT * FROM experience_state WHERE entity_id = {ENTITY}",
+]
+
+async def recv_json(ws, timeout=180):
+    while True:
+        msg = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        if isinstance(msg, str):
+            return json.loads(msg)
+
+async def main():
+    async with websockets.connect(
+        URL, subprotocols=["v1.json.spacetimedb"], max_size=None
+    ) as ws:
+        assert "IdentityToken" in await recv_json(ws)
+
+        await ws.send(json.dumps({
+            "Subscribe": {"request_id": 1, "query_strings": QUERIES}
+        }))
+        applied = await recv_json(ws)
+        isub = applied["InitialSubscription"]
+        skill_names = {}
+        username = None
+        stacks = []
+
+        for table in isub["database_update"]["tables"]:
+            name = table["table_name"]
+            for upd in table["updates"]:
+                for raw in upd.get("inserts", []):
+                    row = json.loads(raw) if isinstance(raw, str) else raw
+                    if name == "skill_desc":
+                        skill_names[row["id"]] = row["name"]
+                    elif name == "player_username_state":
+                        username = row["username"]
+                        print(f"username={username} entity_id={row['entity_id']}")
+                    elif name == "player_state":
+                        print(
+                            f"  signed_in={row.get('signed_in')} "
+                            f"sign_in_timestamp={row.get('sign_in_timestamp')}"
+                        )
+                    elif name == "experience_state":
+                        stacks = row.get("experience_stacks") or []
+
+        for skill_id, xp in sorted(stacks, key=lambda p: -p[1])[:5]:
+            print(f"  {skill_names.get(skill_id, '?'):&lt;20} skill_id={skill_id} xp={xp}")
+
+asyncio.run(main())</code></pre>
+      </div>
+    </div>
+
+    <h3>Wire-level notes (v2 additive)</h3>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Role</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>request_id</code></td>
+            <td>Client-chosen; echoed on <code>SubscribeApplied</code>.</td>
+          </tr>
+          <tr>
+            <td><code>query_set_id</code></td>
+            <td>New id appends an additive set; reuse replaces that set.</td>
+          </tr>
+          <tr>
+            <td><code>query_strings</code></td>
+            <td>SQL list for this set.</td>
+          </tr>
+          <tr>
+            <td>v1 <code>Subscribe</code></td>
+            <td>Set-replace (replaces previous queries). Use filters or
+              small tables; for additive v1 use <code>SubscribeMulti</code>
+              (SDK) or prefer v2.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="banner good">
+      <b>Next:</b> <a href="players.html">Extract player data</a> for the
+      HTTP join path, or <a href="troubleshoot.html">If it fails</a> when
+      Applied never arrives.
+    </div>
+
+    <div class="next">
+      <a href="connect.html">← Connect</a>
+      <a href="schema.html">Next: Schema <span class="muted">HTTP discovery &amp; codegen</span></a>
+    </div>
+  </main>
+</div>
+<script src="js/tutorial.js"></script>
+</body>
+</html>

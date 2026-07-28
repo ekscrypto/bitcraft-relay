@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>relay.bitcraftsync.app</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --good: #3fb950;
+    --bad: #f85149;
+    --warn: #d29922;
+    --link: #79c0ff;
+    --code-bg: #0d1117;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header h1 { font-size: 24px; margin: 0 0 6px; }
+  header .lede { margin: 0 0 8px; color: var(--text); max-width: 76ch; }
+  header .disclaimer { color: var(--muted); font-size: 12px; margin: 0; }
+  header .disclaimer a { color: var(--muted); text-decoration: underline; }
+  .health-line {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  h2 {
+    font-size: 13px;
+    margin: 36px 0 4px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .section-note { color: var(--muted); font-size: 13px; margin: 4px 0 12px; max-width: 92ch; }
+  .section-note code, p code, li code, td code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 12.5px; }
+  a { color: var(--link); }
+
+  .pill {
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 12px;
+    background: #21262d;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+  }
+  .pill.up { background: rgba(63, 185, 80, 0.18); color: var(--good); }
+  .pill.bad { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
+  .pill.warn { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    background: #161b22;
+    white-space: nowrap;
+  }
+  tbody td { padding: 9px 14px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #1c2128; }
+  td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .src { color: var(--link); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .instance-tag { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  .url-cell { display: flex; align-items: center; gap: 8px; }
+  .url-cell code { flex: 1 1 auto; overflow-x: auto; white-space: nowrap; display: block; }
+  button.copy {
+    background: #21262d;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 9px;
+    cursor: pointer;
+    font-size: 11px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  button.copy:hover { background: #30363d; }
+  button.copy.ok { color: var(--good); border-color: rgba(63,185,80,0.4); }
+
+  .endpoints td p { margin: 2px 0 0; }
+  .endpoints .ep { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--link); }
+  .curl {
+    margin-top: 6px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 9px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .curl .prompt { color: var(--muted); user-select: none; }
+
+  .banner {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .banner.bad { background: rgba(248, 81, 73, 0.08); border-color: rgba(248, 81, 73, 0.4); color: var(--bad); }
+  .banner.warn { background: rgba(210, 153, 34, 0.08); border-color: rgba(210, 153, 34, 0.4); color: var(--warn); }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 4px 0 12px;
+  }
+  .meta-row .left { color: var(--muted); font-size: 12px; }
+  .meta-row .left b { color: var(--text); }
+  button.refresh {
+    background: #21262d;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  button.refresh:hover { background: #30363d; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    margin: 4px 0 14px;
+  }
+  .stats[hidden] { display: none; }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+  }
+  .stat-label {
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat-value {
+    font-size: 18px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+    white-space: nowrap;
+  }
+  .stat-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  .loading { color: var(--muted); padding: 18px 14px; font-size: 13px; }
+  .empty { color: var(--muted); padding: 18px 14px; font-size: 13px; text-align: center; }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  footer a { color: var(--muted); text-decoration: underline; }
+
+  @media (max-width: 640px) {
+    body { padding: 20px 14px 48px; font-size: 13px; }
+    .hide-sm { display: none; }
+    thead th, tbody td { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>relay.bitcraftsync.app</h1>
+    <p class="lede">
+      A community SpacetimeDB relay/proxy for <a href="https://bitcraftonline.com" target="_blank" rel="noopener">BitCraft</a>. It holds a single
+      persistent subscription to each upstream game region and fans it out to
+      any number of downstream clients from a sibling SpacetimeDB &mdash; so
+      community tools (BitCraftMap, BitCraftSync, BitJita, &hellip;) share one
+      upstream cost instead of each holding their own subscription.     Point your
+      SpacetimeDB SDK at the addresses below; it&rsquo;s a drop-in
+      <code>wss://</code> replacement. New here?
+      Start with the <a href="/tutorial/">step-by-step tutorial</a>
+      (connect, subscribe, schema, relay-cache joins, live inventory WS), or open the
+      <a href="/explorer/">data explorer</a> to browse mirror tables in the browser.
+    </p>
+    <p class="disclaimer">
+      Community project &mdash; not affiliated with Clockwork Labs.
+      SpacetimeDB&trade; is a trademark of
+      <a href="https://clockworklabs.io" target="_blank" rel="noopener">Clockwork Labs</a>.
+      &middot; <a href="/tutorial/">How to use the relay</a>
+      &middot; <a href="/explorer/">Data explorer</a>
+    </p>
+    <div class="health-line">
+      <span id="overall-pill" class="pill">fetching&hellip;</span>
+      <span id="overall-text" style="color: var(--muted); font-size: 13px;"></span>
+    </div>
+  </header>
+
+  <!-- Section 1: System health -->
+  <h2>System health</h2>
+  <div class="meta-row">
+    <span class="left"><b id="src-count">–</b> sources mirrored &middot; fetched <span id="fetched-at">never</span><span id="fetch-error" style="display:none; color:var(--bad); margin-left:6px; font-size:12px;"></span></span>
+    <button class="refresh" id="refresh-btn" type="button">Refresh</button>
+  </div>
+  <div class="stats" id="sys-stats" hidden>
+    <div class="stat">
+      <div class="stat-label">Load 1 min</div>
+      <div class="stat-value" id="stat-load1">–</div>
+      <div class="stat-sub" id="stat-load1-sub"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Load 5 min</div>
+      <div class="stat-value" id="stat-load5">–</div>
+      <div class="stat-sub" id="stat-load5-sub"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Load 15 min</div>
+      <div class="stat-value" id="stat-load15">–</div>
+      <div class="stat-sub" id="stat-load15-sub"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Network in</div>
+      <div class="stat-value" id="stat-net-in">–</div>
+      <div class="stat-sub" id="stat-net-sub"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Network out</div>
+      <div class="stat-value" id="stat-net-out">–</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Memory free</div>
+      <div class="stat-value" id="stat-mem">–</div>
+      <div class="stat-sub" id="stat-mem-sub"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Port</th>
+          <th class="hide-sm">Database</th>
+          <th>Status</th>
+          <th class="hide-sm">Throughput</th>
+          <th>Uptime</th>
+        </tr>
+      </thead>
+      <tbody id="health-body">
+        <tr><td colspan="6" class="loading">Loading&hellip;</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="section-note" style="margin-top: 10px;">
+    Status reflects each region&rsquo;s live upstream connection; throughput is
+    incoming data over the last minute; uptime is how long the current
+    upstream connection has held continuously (hover for process and
+    local-stdb uptime). Deeper per-instance metrics (disconnect reasons,
+    30-minute windows, host memory and disk) remain on each instance&rsquo;s
+    loopback dashboard and are not part of the public surface.
+  </p>
+
+  <!-- Section 2: SpacetimeDB relays (wss://) -->
+  <h2>SpacetimeDB relays</h2>
+  <p class="section-note">
+    Each row is a live mirrored region. Connect your SpacetimeDB SDK with the
+    <b>SDK address</b> as the host and the <b>Database</b> as the database name,
+    or open the full subscribe URL for raw-WebSocket testing. The frontend
+    negotiates whichever subprotocol the client offers &mdash;
+    <code>v1.bsatn.spacetimedb</code> (synthesises full upstream-flavored
+    <code>TransactionUpdate</code>s) or <code>v2.bsatn.spacetimedb</code> (plain
+    passthrough). See the
+    <a href="https://github.com/ekscrypto/spacetimedb-relay#connecting-downstream-clients" target="_blank" rel="noopener">README</a>
+    for protocol details. See also the
+    <a href="/tutorial/">How to use the relay</a> tutorial (Python &amp; Rust)
+    and the in-browser <a href="/explorer/">data explorer</a>.
+    Ports with no relay behind them return nginx
+    <code>502</code>; only sources reported live by <code>/health</code> are listed.
+  </p>
+  <div class="banner warn">
+    <b>Subscriptions only.</b> <code>OneOffQuery</code> and
+    <code>CallReducer</code> are not supported through this relay. Issuing
+    either will return an error immediately. Use SDK table subscriptions
+    instead &mdash; subscribe to the tables your tool needs and read rows
+    from the local cache. The relay is read-only.
+  </div>
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Instance</th>
+          <th>Port</th>
+          <th class="hide-sm">Database (mirror)</th>
+          <th>SDK address</th>
+          <th>Full subscribe URL</th>
+        </tr>
+      </thead>
+      <tbody id="relays-body">
+        <tr><td colspan="5" class="loading">Loading live sources from <code>/health</code>&hellip;</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Section 3: Schema endpoint -->
+  <h2>Schema endpoint</h2>
+  <p class="section-note">
+    Each relay also serves its upstream&rsquo;s schema as SATS-JSON over plain
+    HTTP on the same port as its <code>wss://</code> listener. Substitute the
+    <b>Port</b> and <b>Database (mirror)</b> values from the table above.
+    The response carries <code>Content-Type: application/json</code> and is the
+    cached upstream schema (the bytes the relay fetched at startup and codegen
+    &rsquo;d its mirror from) &mdash; about 580&nbsp;KB for a BitCraft module,
+    with <code>Cache-Control: public, max-age=60</code>. The
+    <code>?version=9</code> query is accepted but ignored: only the v9 format
+    is cached. Useful for codegen, type inspection, or feeding a local SDK
+    without hitting upstream. The <a href="/explorer/">data explorer</a>
+    uses this endpoint to list tables.
+  </p>
+  <div class="panel">
+    <table class="endpoints">
+      <thead>
+        <tr>
+          <th>URL template</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <code>https://relay.bitcraftsync.app:&lt;port&gt;/v1/database/&lt;mirror-database&gt;/schema?version=9</code>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/schema?version=9</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Section 4: Health + relay-cache HTTP endpoints -->
+  <h2>HTTP endpoints</h2>
+  <p class="section-note">
+    Read-only JSON (protobuf available via
+    <code>Accept: application/x-protobuf</code> on the cache routes;
+    schemas at <a class="ep" href="/proto" target="_blank" rel="noopener">/proto</a>).
+    Fleet health refreshes every 30 seconds; the claim, player, deposit,
+    and storage-log cache is live in-memory state mirrored from each region.
+  </p>
+  <div class="panel">
+    <table class="endpoints">
+      <thead>
+        <tr>
+          <th>Endpoint</th>
+          <th>Returns</th>
+          <th>Query params</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a class="ep" href="/health" target="_blank" rel="noopener">/health</a></td>
+          <td>
+            Fleet source map: per-source <code>port</code>, mirror
+            <code>database</code> name, <code>schema_cached</code> flag,
+            live <code>metrics.upstream.state</code> and throughput, plus
+            the host&rsquo;s <code>system.cpu.load_average</code>,
+            <code>system.memory</code> (free / total), and
+            <code>system.network</code> rolling rate. <code>schema_count</code>
+            reflects the number of discovered sources.
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/health</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>
+            <a class="ep" href="/cache-health" target="_blank" rel="noopener">/cache-health</a><br>
+            <a class="ep" href="/proto" target="_blank" rel="noopener">/proto</a>
+          </td>
+          <td>
+            Cache readiness (<code>relay-cache</code>): top-level
+            <code>ready</code> and per-region <code>ready</code> flags.
+            Protobuf schema list and raw <code>.proto</code> download for
+            the cache DTOs. Operational internals (memory pressure,
+            stream counters, row counts) are on loopback-only
+            <code>127.0.0.1:8089/internal/stats</code>.
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/cache-health</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/proto</div>
+            <div class="curl"><span class="prompt">$</span> curl -OJ https://relay.bitcraftsync.app/proto/relay_cache.proto</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>
+            <a class="ep" href="/claim?name=concordia" target="_blank" rel="noopener">/claim</a><br>
+            <span class="ep">/claim/&lt;id&gt;</span>
+          </td>
+          <td>
+            Claim cache (<code>relay-cache</code>): lookup by PK or name
+            substring (PK includes supplies, upkeep, tier, researched
+            techs, owner username), per-claim inventory (shared storage
+            only &mdash; no Town Banks; grouped by overworld / interior
+            dimension with entrance), members (roles + skills + hexcoins +
+            last login), and crafts. Legacy <code>/citizens</code> and
+            <code>/hexcoins</code> still work as projections of members.
+            (progressive + passive, optional <code>completed</code> filter).
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/claim?name=concordia'</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/claim/&lt;id&gt;</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/claim/&lt;id&gt;/inventory</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/claim/&lt;id&gt;/members</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/claim/&lt;id&gt;/citizens</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/claim/&lt;id&gt;/hexcoins</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/claim/&lt;id&gt;/crafts?completed=false'</div>
+          </td>
+          <td>
+            <code>name</code> (substring, for <code>/claim</code>);
+            <code>completed</code> (optional bool, for <code>/crafts</code>)
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a class="ep" href="/player?name=maple" target="_blank" rel="noopener">/player</a><br>
+            <span class="ep">/player/&lt;id&gt;</span>
+          </td>
+          <td>
+            Player cache (<code>relay-cache</code>): username search
+            (incl. <code>last_login_timestamp</code> / <code>signed_in</code> /
+            <code>last_active_timestamp</code>),
+            personal inventories (pockets / toolbelt / wallet / bank /
+            wagon / cache / boat / recovery / deployable),
+            first-house contents resolved server-side from the
+            player id (<code>status</code> is <code>ok</code> or
+            <code>noHouse</code>), skill levels, and crafts
+            (optional <code>completed</code> filter).
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/player?name=maple'</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/player/&lt;id&gt;</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/player/&lt;id&gt;/inventory</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/player/&lt;id&gt;/housing</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/player/&lt;id&gt;/skills</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/player/&lt;id&gt;/crafts?completed=true'</div>
+          </td>
+          <td>
+            <code>name</code> (substring, for <code>/player</code>;
+            clients should send &ge;2 chars);
+            <code>completed</code> (optional bool, for <code>/crafts</code>)
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a class="ep" href="/deposits?region=14" target="_blank" rel="noopener">/deposits</a>
+          </td>
+          <td>
+            Hexite deposits (<code>relay-cache</code>): global flat list
+            with game coords (<code>north</code>=z, <code>east</code>=x).
+            Active deposits omit <code>respawn_at</code>; depleted ones
+            set it from public <code>growth_state</code> (Depleted&rarr;Hexite,
+            6–8 days). Join misses surface as
+            <code>status: "unknown"</code> (not harvestable).
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/deposits</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/deposits?region=14'</div>
+          </td>
+          <td>
+            <code>region</code> (optional BitCraft region id)
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a class="ep" href="/storage-logs?storageId=1008806316593474517&amp;region=14&amp;limit=20" target="_blank" rel="noopener">/storage-logs</a>
+          </td>
+          <td>
+            Storage deposit/withdraw history (<code>relay-cache</code>),
+            retained for the upstream ~15&ndash;16 day window. Exactly one
+            mode per request: by chest, by player, or by item scoped to a
+            claim or player. Each entry includes building
+            <code>entity_id</code> / <code>name</code> / <code>nickname</code>,
+            claim, player, action, and item stack.
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/storage-logs?storageId=&lt;id&gt;'</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/storage-logs?playerId=&lt;id&gt;&amp;limit=50'</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/storage-logs?itemId=&lt;id&gt;&amp;claimId=&lt;id&gt;'</div>
+            <div class="curl"><span class="prompt">$</span> curl 'https://relay.bitcraftsync.app/storage-logs?itemId=&lt;id&gt;&amp;playerId=&lt;id&gt;'</div>
+          </td>
+          <td>
+            One of: <code>storageId</code>;
+            <code>playerId</code>;
+            <code>itemId</code>+<code>claimId</code>;
+            <code>itemId</code>+<code>playerId</code>.
+            Optional: <code>itemType</code> (<code>Item</code>|<code>Cargo</code>),
+            <code>region</code>, <code>limit</code> (newest N)
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- The public multiplexed /inventory/ws and per-entity /ws routes were
+       removed; relay-cache now serves HTTP read APIs plus a public
+       /internal/dim-buildings/ws (housing-interior building ids for
+       bitcraft-streamd and other clients; /internal/stats stays loopback). -->
+
+  <footer>
+    <span>
+      <a href="https://github.com/ekscrypto/spacetimedb-relay" target="_blank" rel="noopener">GitHub &middot; ekscrypto/spacetimedb-relay</a>
+      &middot;
+      <a href="https://ko-fi.com/ekscrypto" target="_blank" rel="noopener">Donate</a>
+      &middot; community project, MIT licensed.
+    </span>
+    <span>Auto-refreshes every 60s.</span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var relaysBody = document.getElementById("relays-body");
+  var healthBody = document.getElementById("health-body");
+  var overallPill = document.getElementById("overall-pill");
+  var overallText = document.getElementById("overall-text");
+  var srcCount = document.getElementById("src-count");
+  var fetchedAt = document.getElementById("fetched-at");
+  var refreshBtn = document.getElementById("refresh-btn");
+  var sysStats = document.getElementById("sys-stats");
+  var fetchError = document.getElementById("fetch-error");
+  var lastFetched = null;
+  var everFetched = false;
+  var timer = null;
+
+  // Known region set as a degraded fallback if /health is unreachable.
+  // Mirrors the live-instance table in the repo (CLAUDE.local.md). Clearly
+  // marked stale when shown. Kept to the public 3000-3025 band.
+  var FALLBACK_SOURCES = [
+    { name: "global",            port: 3000, database: "relay-mirror-bc-global" },
+    { name: "bitcraft-live-3",   port: 3003, database: "relay-mirror-bc3"  },
+    { name: "bitcraft-live-7",   port: 3007, database: "relay-mirror-bc7"  },
+    { name: "bitcraft-live-8",   port: 3008, database: "relay-mirror-bc8"  },
+    { name: "bitcraft-live-9",   port: 3009, database: "relay-mirror-bc9"  },
+    { name: "bitcraft-live-11",  port: 3011, database: "relay-mirror-bc11" },
+    { name: "bitcraft-live-12",  port: 3012, database: "relay-mirror-bc12" },
+    { name: "bitcraft-live-13",  port: 3013, database: "relay-mirror-bc13" },
+    { name: "bitcraft-live-14",  port: 3014, database: "relay-mirror-bc14" },
+    { name: "bitcraft-live-15",  port: 3015, database: "relay-mirror-bc15" },
+    { name: "bitcraft-live-17",  port: 3017, database: "relay-mirror-bc17" },
+    { name: "bitcraft-live-18",  port: 3018, database: "relay-mirror-bc18" },
+    { name: "bitcraft-live-19",  port: 3019, database: "relay-mirror-bc19" },
+    { name: "bitcraft-live-23",  port: 3023, database: "relay-mirror-bc23" }
+  ];
+
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+
+  function regionNumber(name, port) {
+    if (name === "global") return 0;
+    var m = /-(\d+)$/.exec(name);
+    if (m) return parseInt(m[1], 10);
+    return port - 3000;
+  }
+
+  function sortSources(arr) {
+    return arr.slice().sort(function (a, b) {
+      var ra = regionNumber(a.name, a.port);
+      var rb = regionNumber(b.name, b.port);
+      if (ra !== rb) return ra - rb;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function instanceLabel(name, port) {
+    if (name === "global") {
+      return '<span class="src">global</span>' +
+        '<div class="instance-tag">reference data &middot; port = 3000</div>';
+    }
+    var r = regionNumber(name, port);
+    return '<span class="src">' + escapeHtml(name) + '</span>' +
+      '<div class="instance-tag">region ' + r + ' &middot; port = 3000 + ' + r + '</div>';
+  }
+
+  function subscribeUrl(port, database) {
+    return "wss://relay.bitcraftsync.app:" + port +
+      "/v1/database/" + encodeURIComponent(database) + "/subscribe";
+  }
+
+  function sdkAddress(port) {
+    return "wss://relay.bitcraftsync.app:" + port;
+  }
+
+  function copyButton(text) {
+    var btn = el("button", "copy", "copy");
+    btn.type = "button";
+    btn.addEventListener("click", function () {
+      var done = function () {
+        btn.textContent = "copied";
+        btn.classList.add("ok");
+        setTimeout(function () {
+          btn.textContent = "copy";
+          btn.classList.remove("ok");
+        }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {
+          // fall through to legacy
+          legacyCopy(text); done();
+        });
+      } else {
+        legacyCopy(text); done();
+      }
+    });
+    return btn;
+  }
+
+  function legacyCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  function renderRelays(sources, stale) {
+    relaysBody.innerHTML = "";
+    if (!sources.length) {
+      relaysBody.appendChild(el("tr", null,
+        '<td colspan="5" class="empty">No sources reported.</td>'));
+      return;
+    }
+    sortSources(sources).forEach(function (s) {
+      var tr = document.createElement("tr");
+      tr.appendChild(el("td", null, instanceLabel(s.name, s.port)));
+      tr.appendChild(el("td", "num mono", String(s.port)));
+      tr.appendChild(el("td", "mono hide-sm", escapeHtml(s.database || "—")));
+      tr.appendChild(el("td", "mono", escapeHtml(sdkAddress(s.port))));
+
+      var urlTd = el("td");
+      var urlWrap = el("div", "url-cell");
+      urlWrap.appendChild(el("code", null, escapeHtml(subscribeUrl(s.port, s.database))));
+      urlWrap.appendChild(copyButton(subscribeUrl(s.port, s.database)));
+      urlTd.appendChild(urlWrap);
+      tr.appendChild(urlTd);
+      relaysBody.appendChild(tr);
+    });
+    if (stale) {
+      var tr = el("tr", null,
+        '<td colspan="5" class="empty" style="color: var(--warn);">' +
+        'Live <code>/health</code> unreachable — showing the last known ' +
+        'source list from this page. Operators: check the host.</td>');
+      relaysBody.appendChild(tr);
+    }
+  }
+
+  function formatBytes(bps) {
+    // bytes/sec → binary-scale rate (KB/s, MB/s, …).
+    var units = ["B/s", "KB/s", "MB/s", "GB/s"];
+    var v = bps, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    if (i === 0) return Math.round(v) + " " + units[i];
+    return v.toFixed(v < 10 ? 1 : 0) + " " + units[i];
+  }
+
+  function formatSize(bytes) {
+    // absolute bytes → binary-scale size (KiB, MiB, GiB, …).
+    if (bytes == null || isNaN(bytes) || bytes < 0) return "—";
+    var units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    var v = bytes, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    if (i === 0) return Math.round(v) + " " + units[i];
+    return v.toFixed(v < 10 ? 1 : 0) + " " + units[i];
+  }
+
+  function formatDuration(seconds) {
+    // seconds → compact "4d 3h 12m" / "2h 15m" / "3m" / "42s".
+    if (seconds == null || isNaN(seconds) || seconds < 0) return "—";
+    var s = Math.floor(seconds);
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + "h " + (m % 60) + "m";
+    var d = Math.floor(h / 24);
+    return d + "d " + (h % 24) + "h";
+  }
+
+  function setText(id, text) {
+    var node = document.getElementById(id);
+    if (node) node.textContent = text;
+  }
+
+  function renderSystem(system) {
+    var cpu = system && system.cpu;
+    var net = system && system.network;
+    var mem = system && system.memory;
+    if (!cpu || !cpu.load_average || !net) {
+      sysStats.hidden = true;
+      return;
+    }
+    var la = cpu.load_average;
+    var cpus = cpu.num_cpus || 0;
+    function ratio(v) {
+      if (!cpus) return "";
+      var r = v / cpus;
+      return "/ " + cpus + " CPUs \u00b7 " + r.toFixed(1) + "\u00d7";
+    }
+    setText("stat-load1", la.one.toFixed(2));
+    setText("stat-load1-sub", ratio(la.one));
+    setText("stat-load5", la.five.toFixed(2));
+    setText("stat-load5-sub", ratio(la.five));
+    setText("stat-load15", la.fifteen.toFixed(2));
+    setText("stat-load15-sub", ratio(la.fifteen));
+
+    setText("stat-net-in", "\u2193 " + formatBytes(net.bytes_per_sec_in));
+    setText("stat-net-out", "\u2191 " + formatBytes(net.bytes_per_sec_out));
+    var samples = net.samples != null ? net.samples : 0;
+    var win = net.window_seconds != null ? Math.round(net.window_seconds / 60) : 0;
+    setText("stat-net-sub", (win ? win + "-min avg" : "average") +
+      (samples ? " \u00b7 " + samples + " samples" : ""));
+
+    // Prefer available (Linux MemAvailable) as "free" — reclaimable
+    // without swap. Fall back to free_bytes on older /health payloads.
+    // Headline is free alone (fits the shared stat-value size); total
+    // and percent live in the subtitle, same pattern as CPU load.
+    if (mem && mem.total_bytes) {
+      var free = mem.available_bytes != null ? mem.available_bytes : mem.free_bytes;
+      var total = mem.total_bytes;
+      var pct = total ? Math.round((free / total) * 100) : 0;
+      setText("stat-mem", formatSize(free));
+      setText("stat-mem-sub", "/ " + formatSize(total) + " \u00b7 " + pct + "% free");
+    } else {
+      setText("stat-mem", "–");
+      setText("stat-mem-sub", "");
+    }
+    sysStats.hidden = false;
+  }
+
+  function formatUnits(n) {
+    if (n == null || isNaN(n)) return "—";
+    if (n < 1000) return String(n);
+    var units = ["", "k", "M", "B"];
+    var v = n, i = 0;
+    while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+    return v.toFixed(v < 10 ? 1 : 0) + units[i];
+  }
+
+  // Incoming throughput (updates/s) over the upstream 1-minute window.
+  // Falls back to "—" when metrics aren't present (older /health). Only
+  // updates/s is shown: bytes/s is deliberately omitted because the
+  // upstream byte counters measure application-layer (BSATN) payload,
+  // which isn't comparable to the host NIC bandwidth shown above and
+  // invited misleading cross-comparisons.
+  function upstreamThroughput(s, stalled) {
+    var up = s.metrics && s.metrics.upstream;
+    if (!up) return "";
+    var main = "", title = [];
+    if (up.units_1m != null) {
+      main = formatUnits(Math.round(up.units_1m / 60)) + " updates/s";
+    }
+    if (stalled) {
+      title.push("stalled: 0 updates in the last 60s");
+    }
+    if (up.units_5m != null) {
+      title.push("5-min avg: " + Math.round(up.units_5m / 300) + " updates/s");
+    }
+    var style = stalled ? ' style="color: var(--warn);"' : "";
+    return main ? '<span class="mono"' + style + ' title="' +
+      escapeHtml(title.join("\n")) + '">' + main + "</span>" : "";
+  }
+
+  // Stall detection: a relay is "stalled" when its upstream connection
+  // reports "up" but delivered zero updates in the last minute — the socket
+  // is open but no data is flowing, a silent failure mode that plain "up"
+  // hides and which is an error condition for downstream clients. Startup
+  // is not a concern: a freshly-launched relay reports the "initial" state,
+  // not "up", so any source we see as "up" with zero throughput is
+  // genuinely stalled. Returns null when not stalled or when units aren't
+  // reported (legacy /health) — callers treat null as "not stalled".
+  function upstreamStalled(s) {
+    var up = s.metrics && s.metrics.upstream;
+    if (!up || up.state !== "up") return null;
+    if (up.units_1m == null) return null;            // not measured → unknown
+    if (up.units_1m === 0) {
+      return { units_1m: 0, units_5m: up.units_5m };
+    }
+    return null;
+  }
+
+  // Uptime column: headline is how long the current upstream connection has
+  // held continuously — the most operationally meaningful "is data flowing"
+  // signal. When upstream is down we show the local-stdb uptime instead
+  // (still useful: it shows whether the mirror is independently healthy),
+  // and fall back to the process uptime. Hover gives the full breakdown of
+  // all three, with last-down timestamps and disconnect reasons when known.
+  function uptimeCell(s) {
+    var m = s.metrics || {};
+    var proc = m.process_uptime_seconds;
+    var up = m.upstream || {};
+    var ls = m.local_stdb || {};
+    var main, parts = [];
+
+    var upUptime = (up.state === "up") ? up.uptime_seconds : null;
+    var lsUptime = (ls.state === "up") ? ls.uptime_seconds : null;
+
+    if (upUptime != null) {
+      main = formatDuration(upUptime);
+    } else if (lsUptime != null) {
+      main = formatDuration(lsUptime);
+    } else {
+      main = formatDuration(proc);
+    }
+
+    parts.push("process: " + formatDuration(proc));
+    if (upUptime != null) {
+      parts.push("upstream: " + formatDuration(upUptime));
+    } else if (up.last_down_at != null) {
+      parts.push("upstream: down (last down " +
+        new Date(up.last_down_at * 1000).toLocaleString() + ")");
+      if (up.last_disconnect_reason) {
+        parts.push("  reason: " + up.last_disconnect_reason);
+      }
+    } else {
+      parts.push("upstream: —");
+    }
+    if (lsUptime != null) {
+      parts.push("local_stdb: " + formatDuration(lsUptime));
+    } else if (ls.last_down_at != null) {
+      parts.push("local_stdb: down (last down " +
+        new Date(ls.last_down_at * 1000).toLocaleString() + ")");
+      if (ls.last_disconnect_reason) {
+        parts.push("  reason: " + ls.last_disconnect_reason);
+      }
+    } else {
+      parts.push("local_stdb: —");
+    }
+
+    return '<span class="mono" title="' + escapeHtml(parts.join("\n")) + '">' +
+      escapeHtml(main) + "</span>";
+  }
+
+  function renderHealth(sources, schemaCount) {
+    healthBody.innerHTML = "";
+    if (!sources.length) {
+      healthBody.appendChild(el("tr", null,
+        '<td colspan="6" class="empty">No sources reported.</td>'));
+      return;
+    }
+    sortSources(sources).forEach(function (s) {
+      var tr = document.createElement("tr");
+      tr.appendChild(el("td", "src", escapeHtml(s.name)));
+      tr.appendChild(el("td", "num mono", String(s.port)));
+      tr.appendChild(el("td", "mono hide-sm", escapeHtml(s.database || "—")));
+
+      // Status: driven by the live upstream (and local-stdb) connection
+      // state, not by schema cache. "up" requires both links up; "down"
+      // if either is down or if no state is reported at all (a source
+      // with no metrics is assumed down, not initialising); "stalled"
+      // (warn) when both links are up but upstream delivered zero updates
+      // in the last minute — an error condition we surface over the plain
+      // "up"; otherwise "initial" only when a partial/ transitional state
+      // is present.
+      var m = s.metrics || {};
+      var upState = (m.upstream && m.upstream.state) || "";
+      var lsState = (m.local_stdb && m.local_stdb.state) || "";
+      var stalled = upstreamStalled(s);
+      var state, cls, label, pillTitle;
+      if (upState === "up" && lsState === "up") {
+        if (stalled) {
+          state = "stalled"; cls = "warn"; label = "stalled";
+          pillTitle = "upstream socket is up but delivered 0 updates in the last 60s\n" +
+            "(upstream: up\nlocal_stdb: up)";
+        } else {
+          state = "up"; cls = "up"; label = "up";
+          pillTitle = "upstream: up\nlocal_stdb: up";
+        }
+      } else if (upState === "down" || lsState === "down") {
+        state = "down"; cls = "bad"; label = "down";
+        pillTitle = "upstream: " + (upState || "—") + "\nlocal_stdb: " + (lsState || "—");
+      } else if (!upState && !lsState) {
+        // No state reported at all — assume down rather than initialising.
+        state = "down"; cls = "bad"; label = "down";
+        pillTitle = "upstream: —\nlocal_stdb: —";
+      } else {
+        state = "initial"; cls = "warn"; label = upState || lsState || "initial";
+        pillTitle = "upstream: " + (upState || "—") + "\nlocal_stdb: " + (lsState || "—");
+      }
+      tr.appendChild(el("td", null,
+        '<span class="pill ' + cls + '" title="' + escapeHtml(pillTitle) +
+        '">' + escapeHtml(label) + "</span>"));
+
+      tr.appendChild(el("td", "num hide-sm", upstreamThroughput(s, stalled)));
+      tr.appendChild(el("td", "num", uptimeCell(s)));
+      healthBody.appendChild(tr);
+    });
+
+    // Overall header pill: reflects real up/down/stalled across all sources,
+    // derived from upstream/local_stdb state. A source with no reported
+    // metrics is counted as down, not initialising — so a partially-down
+    // fleet reports the down count rather than "connecting". A stalled
+    // source (up but zero throughput) counts separately and is surfaced as
+    // a warn-tier issue only when nothing is fully down. Priority on the
+    // header pill: down > stalled > connecting > all-up.
+    var upCount = 0, downCount = 0, stalledCount = 0, hasMetrics = false;
+    sources.forEach(function (s) {
+      var m = s.metrics && s.metrics.upstream;
+      if (!m) {
+        // No metrics → assume down.
+        downCount++;
+        return;
+      }
+      hasMetrics = true;
+      if (m.state === "down") {
+        downCount++;
+      } else if (m.state === "up") {
+        if (upstreamStalled(s)) stalledCount++;
+        else upCount++;
+      }
+    });
+    srcCount.textContent = String(schemaCount != null ? schemaCount : sources.length);
+    if (hasMetrics || downCount > 0) {
+      if (downCount === 0 && upCount === sources.length) {
+        overallPill.className = "pill up";
+        overallPill.textContent = "all up";
+        overallText.textContent = "every region’s upstream connection is live.";
+      } else if (downCount > 0) {
+        overallPill.className = "pill bad";
+        overallPill.textContent = downCount + " down";
+        overallText.textContent = downCount + " of " + sources.length +
+          " sources report a down upstream connection.";
+      } else if (stalledCount > 0) {
+        overallPill.className = "pill warn";
+        overallPill.textContent = stalledCount + " stalled";
+        overallText.textContent = stalledCount + " of " + sources.length +
+          " sources are up but delivering no updates.";
+      } else {
+        overallPill.className = "pill warn";
+        overallPill.textContent = "connecting";
+        overallText.textContent = "one or more sources are still initialising.";
+      }
+    } else {
+      // Legacy /health without metrics — keep a neutral pill.
+      overallPill.className = "pill " + (sources.length ? "up" : "bad");
+      overallPill.textContent = sources.length ? "listed" : "no sources";
+      overallText.textContent = "";
+    }
+  }
+
+  function setFetched() {
+    everFetched = true;
+    lastFetched = new Date();
+    fetchedAt.textContent = lastFetched.toLocaleTimeString();
+    fetchError.style.display = "none";
+  }
+
+  function showFetchError() {
+    overallPill.className = "pill bad";
+    overallPill.textContent = "unreachable";
+    overallText.textContent = "/health did not respond.";
+    fetchError.textContent = "· fetch failed";
+    fetchError.style.display = "";
+    sysStats.hidden = true;
+    if (!everFetched) {
+      // No prior data for the relay table — show the hardcoded fallback
+      // addresses so users can still try to connect. The health table is
+      // left as "Loading…"; the pill + error badge above it are enough.
+      renderRelays(FALLBACK_SOURCES, true);
+      srcCount.textContent = String(FALLBACK_SOURCES.length);
+    }
+    // With prior data both tables are left intact — users keep the last
+    // known state while waiting for /health to recover.
+  }
+
+  function refresh() {
+    var started = Date.now();
+    fetch("/health", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        var sources = [];
+        if (data && data.sources && typeof data.sources === "object") {
+          Object.keys(data.sources).forEach(function (name) {
+            var s = data.sources[name];
+            if (!s || typeof s !== "object") return;
+            sources.push({
+              name: name,
+              port: s.port,
+              database: s.database,
+              schema_cached: s.schema_cached === true,
+              metrics: s.metrics || null
+            });
+          });
+        }
+        var schemaCount = (typeof data.schema_count === "number")
+          ? data.schema_count : sources.length;
+        setFetched();
+        renderRelays(sources, false);
+        renderHealth(sources, schemaCount);
+        renderSystem(data && data.system);
+      })
+      .catch(function (err) {
+        console.warn("health fetch failed:", err);
+        showFetchError();
+      });
+  }
+
+  refreshBtn.addEventListener("click", function () {
+    // Reset the 60s cadence from now, then fetch.
+    if (timer) { clearTimeout(timer); timer = null; }
+    schedule();
+    refresh();
+  });
+
+  function schedule() {
+    timer = setTimeout(function () {
+      schedule(); // re-arm before any async work so a failure can't break the loop
+      refresh();
+    }, 60000);
+  }
+
+  refresh();
+  schedule();
+})();
+</script>
+</body>
+</html>

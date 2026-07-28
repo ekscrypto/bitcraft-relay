@@ -1,0 +1,22 @@
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+.env
+.env.local
+.DS_Store
+.vscode/
+.idea/
+.claude/
+.zcode/
+*.swp
+/tmp/
+
+# Local-only operator notes (host names, account specifics).
+CLAUDE.local.md
+
+# BitCraft auth token (long-lived bearer credential).
+.bitcraft-token
+
+# Python bytecode for any local scripts.
+__pycache__/
+*.pyc

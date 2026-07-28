@@ -1,0 +1,130 @@
+# nginx snippet: expose relay-cache on relay.bitcraftsync.app
+#
+# Insert these blocks in the HTTPS `server { ... }` for
+# relay.bitcraftsync.app, BEFORE the catch-all `location /`
+# (which proxies to relay-coordinator on 127.0.0.1:8082).
+#
+# Install on the host:
+#   1. Backup: sudo cp /etc/nginx/sites-available/relay.bitcraftsync.app.conf \
+#        /etc/nginx/sites-available/relay.bitcraftsync.app.conf.bak-cache-$(date +%Y%m%d-%H%M%S)
+#   2. Paste the blocks below before `location /`
+#   3. sudo nginx -t && sudo nginx -s reload
+#
+# Public URLs (binary remains on 127.0.0.1:8089):
+#   https://relay.bitcraftsync.app/cache-health
+#   https://relay.bitcraftsync.app/proto
+#   https://relay.bitcraftsync.app/proto/relay_cache.proto
+#   https://relay.bitcraftsync.app/claim?name=...
+#   https://relay.bitcraftsync.app/claim/<id>
+#   https://relay.bitcraftsync.app/claim/<id>/inventory
+#   https://relay.bitcraftsync.app/claim/<id>/members
+#   https://relay.bitcraftsync.app/claim/<id>/citizens
+#   https://relay.bitcraftsync.app/claim/<id>/hexcoins
+#   https://relay.bitcraftsync.app/claim/<id>/crafts
+#   https://relay.bitcraftsync.app/player?name=...
+#   https://relay.bitcraftsync.app/player/<id>
+#   https://relay.bitcraftsync.app/player/<id>/inventory
+#   https://relay.bitcraftsync.app/player/<id>/housing
+#   https://relay.bitcraftsync.app/player/<id>/skills
+#   https://relay.bitcraftsync.app/player/<id>/crafts
+#   https://relay.bitcraftsync.app/deposits
+#   https://relay.bitcraftsync.app/deposits?region=14
+#   https://relay.bitcraftsync.app/storage-logs?storageId=...
+#   https://relay.bitcraftsync.app/storage-logs?playerId=...
+#   https://relay.bitcraftsync.app/storage-logs?itemId=...&claimId=...
+#   wss://relay.bitcraftsync.app/internal/dim-buildings/ws   (housing-interior push)
+#
+# Loopback-only (NOT proxied here — operational internals, reachable
+# only from the host itself):
+#   curl 127.0.0.1:8089/internal/stats
+#
+# Requires the usual Upgrade map in http {} (already present for relay
+# frontends):
+#   map $http_upgrade $connection_upgrade {
+#       default upgrade;
+#       ''      close;
+#   }
+
+    # relay-cache (loopback read API)
+    location /cache-health {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /proto {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Housing-interior building push WS. Public (no PII, no admin surface —
+    # just building_entity_id u64 arrays per dimension). MUST sit before
+    # the loopback-only /internal/stats catch below so nginx doesn't proxy
+    # /internal/stats. Long-lived socket: no read/send timeout.
+    location /internal/dim-buildings/ws {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Belt-and-suspenders: nothing else under /internal/ is public. This
+    # block returns 404 for any other /internal/* path (e.g. /internal/stats)
+    # even if a future relay-cache release adds a new internal route and the
+    # operator forgets to update the allowlist. Place it AFTER the dim-
+    # buildings route above so that exact path still matches first.
+    location /internal/ {
+        return 404;
+    }
+
+    location /claim {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Claim inventory rollups can be large; no WS on these paths anymore.
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location /player {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Player inventory can be large; no WS on these paths anymore.
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location /deposits {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /storage-logs {
+        proxy_pass http://127.0.0.1:8089;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Busy chests / players can return multi-MB retained windows
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
