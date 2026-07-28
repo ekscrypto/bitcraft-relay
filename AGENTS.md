@@ -75,9 +75,10 @@ itself, or the nginx config end-to-end. Specifically, the following are
 - **Deploy/runbook automation** — this repo has no `Makefile` / CI/CD /
   deploy entrypoint of its own. Day-to-day deploys live in the parent
   workspace ([`DEPLOY.md`](../DEPLOY.md),
-  [`tools/deploy.sh`](../tools/deploy.sh)). Operator specifics (host
-  names, account details, deploy IPs) live in **`CLAUDE.local.md`**,
-  which is gitignored and intentionally absent from the tree.
+  [`tools/deploy.sh`](../tools/deploy.sh)). Operator specifics (SSH
+  account, deploy IPs, host layout) live in **`AGENTS.local.md`** /
+  **`CLAUDE.local.md`**, which are gitignored and intentionally absent
+  from the tree.
 - **Secrets** — upstream developer JWT (from Clockwork Labs), used via
   `RELAY_UPSTREAM_TOKEN` / host `/etc/relay/upstream.env`. Gitignored
   locally (e.g. `.developer-token`); never commit or log it. See

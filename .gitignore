@@ -13,6 +13,7 @@ Cargo.lock.bak
 
 # Local-only operator notes (host names, account specifics).
 CLAUDE.local.md
+AGENTS.local.md
 
 # BitCraft auth token (long-lived bearer credential).
 .bitcraft-token
