@@ -264,7 +264,20 @@
     return regions[i] || null;
   }
 
+  function findTableByName(name) {
+    if (!name) return null;
+    for (var i = 0; i < tables.length; i++) {
+      if (tables[i].name === name) return tables[i];
+    }
+    return null;
+  }
+
   function onRegionChange() {
+    // Carry table + SQL across region switches so the same query can be
+    // re-run on another server (layouts match across relay databases).
+    var prevTableName = selectedTable ? selectedTable.name : null;
+    var prevSql = elSql.value;
+
     disconnect();
     selectedTable = null;
     tables = [];
@@ -294,11 +307,25 @@
         schema = raw;
         tables = parseTables(raw);
         elTableFilter.disabled = false;
-        renderTableList();
-        setStatus(
-          '<span class="ok">' + tables.length + " tables</span> · " +
-          r.database + " · port " + r.port
-        );
+
+        var match = findTableByName(prevTableName);
+        if (match) {
+          selectTable(match, prevSql);
+          setStatus(
+            '<span class="ok">' + tables.length + " tables</span> · " +
+            r.database + " · port " + r.port +
+            " · restored <code>" + escapeHtml(match.name) + "</code>"
+          );
+        } else {
+          renderTableList();
+          setStatus(
+            '<span class="ok">' + tables.length + " tables</span> · " +
+            r.database + " · port " + r.port +
+            (prevTableName
+              ? ' · <span class="warn">table ' + escapeHtml(prevTableName) + " not found</span>"
+              : "")
+          );
+        }
       })
       .catch(function (e) {
         elTableList.innerHTML =
@@ -353,11 +380,17 @@
 
   elTableFilter.addEventListener("input", renderTableList);
 
-  function selectTable(t) {
+  // preservedSql: when switching regions, keep the user's query as-is.
+  // Omit / null / undefined → default SELECT * FROM <table>.
+  function selectTable(t, preservedSql) {
     disconnect();
     selectedTable = t;
     renderTableList();
-    elSql.value = "SELECT * FROM " + t.name;
+    var activeBtn = elTableList.querySelector(".table-item.active");
+    if (activeBtn && activeBtn.scrollIntoView) {
+      activeBtn.scrollIntoView({ block: "nearest" });
+    }
+    elSql.value = preservedSql != null ? preservedSql : ("SELECT * FROM " + t.name);
     elSql.disabled = false;
     elBtnSub.disabled = false;
     elMeta.style.display = "";
@@ -371,7 +404,11 @@
     clearRows();
     updateHugeWarn();
     showError("");
-    setStatus("Ready — edit SQL if needed, then Subscribe");
+    setStatus(
+      preservedSql != null
+        ? "Ready — same query restored; Subscribe to run on this server"
+        : "Ready — edit SQL if needed, then Subscribe"
+    );
   }
 
   elSql.addEventListener("input", updateHugeWarn);
