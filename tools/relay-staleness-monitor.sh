@@ -1,185 +1,140 @@
 #!/bin/sh
-# relay-staleness-monitor.sh — restart relay instances that go silent.
+# relay-staleness-monitor.sh — warn when a live public-mirror region goes
+# silent (transactions_processed stops advancing).
 #
-# A relay's upstream WebSocket can stay open while no longer delivering
-# data: the process keeps running (so systemd Restart=on-failure won't
-# catch it) and upstream.state reports "up", but units_5m/bytes_5m sit at
-# zero. This monitor detects that state and restarts the instance.
+# Watches GET /v1/mirrors on the single public-mirror listen (default
+# http://127.0.0.1:3000/v1/mirrors). If a mirror stays connectivity=live
+# but its transactions_processed counter does not increase for a
+# configurable window (default 10 minutes), log a warning.
 #
-# Long-running daemon. Run as root (calls systemctl). Auto-discovers
-# relay-* units the same way fleet-status.sh does, so it stays correct as
-# regions are added/removed.
+# Do NOT auto-restart public-mirror by default. Restart is host-operator
+# discretion: one process serves all regions, so a restart would drop
+# every mirror at once. Operators may restart manually after confirming
+# the stall is real (journalctl -u public-mirror, /v1/mirrors, etc.).
 #
-# Detection (per instance, per poll):
-#   stale = upstream.state == "up"
-#           AND upstream.units_5m == 0
-#           AND upstream.bytes_5m == 0
-# The 5m metrics are already 5-minute sliding windows computed by the
-# relay process, so a single poll seeing them at zero IS the 5-min-zero
-# signal. state == "initial"/"down" is left to Restart=on-failure and the
-# boot sequencer — only "up but silent" is this monitor's job.
-#
-# Safety gates before any restart:
-#   1. No concurrent republish anywhere in the fleet (a schema-drift
-#      rebuild peaks at ~2.8 GiB; never overlap one with a restart).
-#   2. Per-instance cooldown (default 10 min) — covers the relay's
-#      sliding-window refill after a restart, prevents restart loops.
-#   3. At most one restart per poll cycle. Multiple stale instances are
-#      caught on successive cycles, ≥60s apart.
-#
-# (Historically gated on a shared stdb at :3050. Each relay now spawns
-# its own stdb via --stdb-spawn, so that gate was removed.)
+# Long-running daemon. Simple poll loop — no per-region systemd units
+# (the old relay-bc* fleet is retired).
 #
 # Env knobs (defaults shown):
-#   STALENESS_POLL_SECS=60        poll interval
-#   STALENESS_COOLDOWN_SECS=600   per-instance restart cooldown
-#   STALENESS_CURL_TIMEOUT=4      per-instance /metrics fetch timeout
-#   STALENESS_DRY_RUN=0           set 1 to log-only (no restarts)
+#   MIRRORS_URL=http://127.0.0.1:3000/v1/mirrors
+#   STALENESS_POLL_SECS=60          poll interval
+#   STALENESS_WINDOW_SECS=600       no-progress window before warning (10m)
+#   STALENESS_CURL_TIMEOUT=4        /v1/mirrors fetch timeout
 #   STALENESS_STATE_DIR=/var/lib/relay-staleness
-#   STALENESS_UNIT_DIR=/etc/systemd/system
 #
-# Requires: curl, python3, systemctl.
-# Unit: relay-staleness-monitor.service.
+# Requires: curl, python3.
+# Unit: relay-staleness-monitor.service (host-managed).
 # Logs to stdout/journald under prefix "relay-staleness:".
 
 set -u
 
+MIRRORS_URL="${MIRRORS_URL:-http://127.0.0.1:3000/v1/mirrors}"
 POLL_SECS="${STALENESS_POLL_SECS:-60}"
-COOLDOWN_SECS="${STALENESS_COOLDOWN_SECS:-600}"
+WINDOW_SECS="${STALENESS_WINDOW_SECS:-600}"
 CURL_TIMEOUT="${STALENESS_CURL_TIMEOUT:-4}"
-DRY_RUN="${STALENESS_DRY_RUN:-0}"
 STATE_DIR="${STALENESS_STATE_DIR:-/var/lib/relay-staleness}"
-UNIT_DIR="${STALENESS_UNIT_DIR:-/etc/systemd/system}"
 
 log() { echo "relay-staleness: $*"; }
 
 mkdir -p "$STATE_DIR"
 
-# Discover mirror units in canonical order: global first, then regions by
-# ascending ID. Skips infra units (no mirror). Also skips a legacy
-# `relay-stdb` unit name if one is still present on the host — production
-# uses per-relay `--stdb-spawn`, not a shared stdb.
-discover() {
-    for f in "$UNIT_DIR"/relay-*.service; do
-        [ -e "$f" ] || continue
-        name=$(basename "$f" .service)
-        case "$name" in
-            relay-stdb)              continue ;;  # legacy; unused with --stdb-spawn
-            relay-fleet-sequencer)   continue ;;
-            relay-staleness-monitor) continue ;;
-            relay-global) echo "0global $name" ;;
-            relay-bc*)    echo "$(echo "$name" | sed 's/relay-bc//') $name" ;;
-            *)            echo "999 $name" ;;
-        esac
-    done | sort -n | awk '{print $2}'
-}
-
-# Dashboard port for a unit, parsed from --dashboard-bind in its unit file.
-dash_port() {
-    grep -oE 'dashboard-bind 127\.0\.0\.1:[0-9]+' "$UNIT_DIR/$1.service" 2>/dev/null \
-        | grep -oE '[0-9]+$' | head -1
-}
-
-# Fetch one instance's /metrics JSON, or empty on failure.
-fetch_metrics() {
-    port=$(dash_port "$1")
-    [ -z "$port" ] && return
-    curl -s --max-time "$CURL_TIMEOUT" "http://127.0.0.1:${port}/metrics" 2>/dev/null || true
-}
-
-# Seconds since epoch now.
 now_epoch() { date +%s; }
 
-# Is this unit within its post-restart cooldown? 0 if still cooling, 1 if clear.
-cooldown_clear() {
-    unit="$1"
-    stamp="$STATE_DIR/$unit.restart"
-    [ -e "$stamp" ] || { return 0; }
-    last=$(cat "$stamp" 2>/dev/null || echo 0)
-    case "$last" in *[!0-9]*) last=0 ;; esac
-    elapsed=$(( $(now_epoch) - last ))
-    [ "$elapsed" -ge "$COOLDOWN_SECS" ]
-}
-
-# Snapshot the whole fleet in one pass. Emits one TSV line per reachable
-# instance: unit<TAB>upstream_state<TAB>units_5m<TAB>bytes_5m<TAB>republishing
-# Instances with no dashboard or an unreachable one are omitted — we can't
-# assess them and "initial"/disconnected is not this monitor's job.
-snapshot_fleet() {
-    for unit in $(discover); do
-        json=$(fetch_metrics "$unit")
-        [ -z "$json" ] && continue
-        printf '%s\t' "$unit"
-        printf '%s' "$json" | python3 -c '
-import sys, json
+# Fetch /v1/mirrors and emit one TSV line per mirror:
+#   database<TAB>connectivity<TAB>transactions_processed
+# Empty output on fetch/parse failure.
+snapshot_mirrors() {
+    json=$(curl -sS --max-time "$CURL_TIMEOUT" "$MIRRORS_URL" 2>/dev/null || true)
+    [ -n "$json" ] || return 0
+    printf '%s' "$json" | python3 -c '
+import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
-    print("parse_error\t0\t0\t0"); raise SystemExit
-u = d.get("upstream", {}) or {}
-p = d.get("publisher", {}) or {}
-state = u.get("state") or ""
-units = u.get("units_5m"); bytes = u.get("bytes_5m")
-units = 0 if units is None else int(units)
-bytes = 0 if bytes is None else int(bytes)
-repub = "1" if p.get("republished_this_run") else "0"
-print("\t".join([str(state), str(units), str(bytes), repub]))
+    raise SystemExit(0)
+for m in d.get("mirrors") or []:
+    db = m.get("database") or ""
+    if not db:
+        continue
+    conn = m.get("connectivity") or ""
+    tx = m.get("transactions_processed")
+    tx = 0 if tx is None else int(tx)
+    # Sanitize db for later use as a filename component: keep alnum, dash, underscore.
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in db)
+    print("%s\t%s\t%d\t%s" % (db, conn, tx, safe))
 '
-    done
 }
 
-restart_unit() {
-    unit="$1"
-    ts=$(now_epoch)
-    echo "$ts" > "$STATE_DIR/$unit.restart"
-    if [ "$DRY_RUN" = "1" ]; then
-        log "DRY-RUN: would restart $unit (cooldown stamp written)"
-    else
-        log "RESTARTING $unit (stale: upstream up, 5m throughput zero)"
-        systemctl restart "$unit" 2>&1 | sed 's/^/  /'
-        log "restarted $unit at $(date -Iseconds)"
-    fi
-}
+# State files under STATE_DIR:
+#   <safe>.tx      last observed transactions_processed
+#   <safe>.progress  epoch when tx last increased (or when first seen live)
+#   <safe>.warned    present while a stall warning is active (cleared on progress)
 
 # --- main loop ---
 
-log "monitor started: poll=${POLL_SECS}s cooldown=${COOLDOWN_SECS}s dry_run=$DRY_RUN state=$STATE_DIR"
-log "discovered units: $(discover | tr '\n' ' ')"
+log "monitor started: poll=${POLL_SECS}s window=${WINDOW_SECS}s url=$MIRRORS_URL state=$STATE_DIR"
+log "auto-restart disabled — public-mirror restart is host-operator discretion (one process serves all regions)"
 
 while :; do
-    snap=$(snapshot_fleet)
+    snap=$(snapshot_mirrors)
+    now=$(now_epoch)
 
-    # Gate 1: if any instance is currently republishing, hold off — a
-    # schema-drift rebuild peaks at ~2.8 GiB and must never overlap another.
-    repub_any=$(printf '%s\n' "$snap" | awk -F'\t' '$5 == "1"' | head -1)
-    if [ -n "$repub_any" ]; then
-        log "republish in progress on a fleet instance — skipping cycle"
+    if [ -z "$snap" ]; then
+        log "cycle: /v1/mirrors unreachable or empty — skipping"
         sleep "$POLL_SECS"
         continue
     fi
 
-    # Detect stale instances: upstream "up" but zero 5m throughput.
-    # Emit unit<TAB>units_5m for each, in discovery order (lowest region first).
-    stale=$(printf '%s\n' "$snap" \
-        | awk -F'\t' '$2 == "up" && $3 == "0" && $4 == "0" {print $1}')
+    printf '%s\n' "$snap" | while IFS="$(printf '\t')" read -r db conn tx safe; do
+        [ -n "$db" ] || continue
+        txfile="$STATE_DIR/$safe.tx"
+        progfile="$STATE_DIR/$safe.progress"
+        warnfile="$STATE_DIR/$safe.warned"
 
-    if [ -z "$stale" ]; then
-        # Quiet cycle. Uncomment for per-cycle heartbeat logging:
-        # log "cycle ok: no stale instances"
-        :
-    else
-        for unit in $stale; do
-            if cooldown_clear "$unit"; then
-                restart_unit "$unit"
-                # Gate 3: one restart per cycle. Remaining stale instances
-                # are caught on subsequent cycles (≥60s apart).
-                break
-            else
-                last=$(cat "$STATE_DIR/$unit.restart" 2>/dev/null || echo 0)
-                log "$unit is stale but in cooldown (last restart $(date -r "$last" -Iseconds 2>/dev/null || echo "$last")) — waiting"
+        if [ "$conn" != "live" ]; then
+            # Not live — reset progress tracking; connectivity issues are
+            # not this monitor's job (public-mirror reconnects on its own).
+            rm -f "$txfile" "$progfile" "$warnfile"
+            continue
+        fi
+
+        last_tx=""
+        [ -e "$txfile" ] && last_tx=$(cat "$txfile" 2>/dev/null || true)
+
+        if [ -z "$last_tx" ]; then
+            echo "$tx" > "$txfile"
+            echo "$now" > "$progfile"
+            rm -f "$warnfile"
+            continue
+        fi
+
+        case "$last_tx" in *[!0-9]*) last_tx=0 ;; esac
+
+        if [ "$tx" -gt "$last_tx" ]; then
+            echo "$tx" > "$txfile"
+            echo "$now" > "$progfile"
+            if [ -e "$warnfile" ]; then
+                log "RECOVERED $db: transactions_processed advancing again (now=$tx)"
             fi
-        done
-    fi
+            rm -f "$warnfile"
+            continue
+        fi
+
+        # tx did not increase (equal or somehow lower — still count as stall).
+        echo "$tx" > "$txfile"
+        last_prog=$(cat "$progfile" 2>/dev/null || echo "$now")
+        case "$last_prog" in *[!0-9]*) last_prog=$now ;; esac
+        stalled=$(( now - last_prog ))
+
+        if [ "$stalled" -ge "$WINDOW_SECS" ]; then
+            if [ ! -e "$warnfile" ]; then
+                log "WARNING $db: live but transactions_processed stuck at $tx for ${stalled}s (window=${WINDOW_SECS}s)"
+                log "  restart is host-operator discretion — one public-mirror process serves all regions; do not auto-restart"
+                echo "$now" > "$warnfile"
+            fi
+            # Subsequent cycles stay quiet until progress resumes (RECOVERED).
+        fi
+    done
 
     sleep "$POLL_SECS"
 done

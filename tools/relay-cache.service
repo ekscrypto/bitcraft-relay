@@ -1,17 +1,14 @@
-# Same-host in-memory read cache over the relay fleet.
+# Same-host in-memory read cache over public-mirror.
 #
-# Subscribes to each regional frontend on loopback (v2), holds claim /
-# building / inventory / player / housing / craft / hexite / storage-log
-# tables in columnar memory, and serves the HTTP/protobuf read API
-# (plus the public dim-buildings WS) on 127.0.0.1:8089.
-#
-# Depends on the regional relay frontends being up (discovered from
-# /etc/systemd/system/relay-bc*.service). Schema is fetched once at
-# startup from a regional frontend on loopback.
+# Discovers regional databases from GET /v1/mirrors on the local
+# public-mirror listen address, waits until each is connectivity=live,
+# then opens a v2 BSATN subscription per region. Serves the HTTP/protobuf
+# read API (plus the public dim-buildings WS) on 127.0.0.1:8089.
 [Unit]
-Description=spacetimedb-relay in-memory read cache
-After=network-online.target
+Description=relay-cache (public-mirror read cache)
+After=network-online.target public-mirror.service
 Wants=network-online.target
+Wants=public-mirror.service
 
 [Service]
 Type=simple
@@ -19,9 +16,8 @@ User=relay
 Group=relay
 ExecStart=/srv/relay/bitcraft-relay/target/release/relay-cache \
     --bind 127.0.0.1:8089 \
-    --unit-dir /etc/systemd/system \
-    --schema-host 127.0.0.1:3014 \
-    --schema-db relay-mirror-bc14
+    --mirror-host 127.0.0.1:3000 \
+    --schema-db bitcraft-live-14
 # Diagnosing a hung SubscribeApplied: append --debug to ExecStart (or set
 # RELAY_CACHE_DEBUG=1). Heartbeats every 5s while waiting on bulk load.
 WorkingDirectory=/srv/relay/bitcraft-relay

@@ -1,0 +1,57 @@
+# In-memory multi-region BitCraft mirror (spacetimedb-public-mirror fork).
+#
+# One process mirrors global + every live region via repeated --mirror flags,
+# listening on a single loopback address. nginx terminates TLS on the public
+# 3000–3025 band and proxies every port to this listen addr — clients may use
+# any public port and select the region by database name (bitcraft-live-N).
+#
+# Upstream auth: reuse the existing fleet EnvironmentFile
+# `/etc/relay/upstream.env` (`RELAY_UPSTREAM_TOKEN=…`). The standalone binary
+# accepts that env name. SpacetimeDB JWT keypair for the local listen is
+# separate (`--jwt-*-path` below). Edit drop-ins for the live region set.
+[Unit]
+Description=spacetimedb-public-mirror (BitCraft multi-region)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+# Existing production token (same file as relay-global / relay-bc*).
+EnvironmentFile=-/etc/relay/upstream.env
+# SINGLE listen — nginx proxies all public frontend ports here.
+ExecStart=/srv/relay/spacetimedb-public-mirror/target/release/spacetimedb-standalone start \
+    --data-dir /var/lib/relay/public-mirror \
+    --listen-addr 127.0.0.1:3000 \
+    --jwt-pub-key-path /etc/relay/id_ecdsa.pub \
+    --jwt-priv-key-path /etc/relay/id_ecdsa \
+    --public-mirror-v1 \
+    --non-interactive \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-global \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-3 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-7 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-8 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-9 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-11 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-12 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-13 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-14 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-15 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-17 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-18 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-19 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-23
+WorkingDirectory=/srv/relay/spacetimedb-public-mirror
+Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RUST_LOG=spacetimedb=info,public_mirror=info"
+Restart=on-failure
+RestartSec=5s
+# Initial multi-region seed can take a long time.
+TimeoutStartSec=0
+TimeoutStopSec=30s
+# Soft ceiling — all regions share one in-memory process. Tune on the host.
+MemoryHigh=24G
+
+[Install]
+WantedBy=multi-user.target

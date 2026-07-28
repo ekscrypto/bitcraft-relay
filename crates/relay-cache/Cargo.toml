@@ -43,7 +43,6 @@ spacetimedb-sats = { workspace = true }
 spacetimedb-client-api-messages = { workspace = true }
 
 relay-protocol = { workspace = true }
-relay-coordinator = { workspace = true }
 
 [build-dependencies]
 prost-build = "0.13"

@@ -39,8 +39,6 @@ const HEXITE_INTEGRITY_INTERVAL: Duration = Duration::from_secs(30);
 /// time to land (and claim_local joins to settle).
 const HEXITE_INTEGRITY_GRACE: Duration = Duration::from_secs(15);
 const METRICS_POLL_TIMEOUT: Duration = Duration::from_secs(2);
-const READY_GATE_BACKOFF_MIN: Duration = Duration::from_secs(2);
-const READY_GATE_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// Shared handle for one region's in-memory store. HTTP handlers hold
 /// `Arc<ShardHandle>` and take a read lock for queries.
@@ -139,7 +137,7 @@ pub fn spawn_shard(
     region: u32,
     database: String,
     bind_url: Url,
-    dashboard_port: u16,
+    mirrors_url: String,
     schema: Arc<MirroredSchema>,
     interest: Arc<InterestHub>,
     debug_mode: bool,
@@ -155,7 +153,7 @@ pub fn spawn_shard(
             region,
             database,
             bind_url,
-            dashboard_port,
+            mirrors_url,
             schema,
             store,
             interest,
@@ -180,7 +178,7 @@ async fn run_shard_loop(
     region: u32,
     database: String,
     bind_url: Url,
-    dashboard_port: u16,
+    mirrors_url: String,
     schema: Arc<MirroredSchema>,
     store: Arc<RwLock<RegionStore>>,
     interest: Arc<InterestHub>,
@@ -192,16 +190,20 @@ async fn run_shard_loop(
     let http = reqwest::Client::builder()
         .timeout(METRICS_POLL_TIMEOUT)
         .build()
-        .context("build metrics HTTP client")?;
+        .context("build mirrors HTTP client")?;
 
     loop {
-        match wait_for_relay_ready(region, dashboard_port, &http, shutdown).await? {
-            ReadyGate::Shutdown => {
-                tracing::info!(target: "relay_cache::shard", region, "shard shutting down");
-                clear_store(&store, region);
-                return Ok(());
-            }
-            ReadyGate::Ready => {}
+        let ready = crate::discovery::wait_for_mirror_ready(
+            &mirrors_url,
+            &database,
+            &http,
+            shutdown,
+        )
+        .await?;
+        if !ready {
+            tracing::info!(target: "relay_cache::shard", region, "shard shutting down");
+            clear_store(&store, region);
+            return Ok(());
         }
 
         let result = session(
@@ -261,11 +263,6 @@ async fn run_shard_loop(
     }
 }
 
-enum ReadyGate {
-    Ready,
-    Shutdown,
-}
-
 enum SessionEnd {
     Shutdown,
     Disconnected {
@@ -279,90 +276,6 @@ enum SessionEnd {
     HexiteLocationsMissing {
         connected_at: Instant,
     },
-}
-
-/// Poll the region's loopback dashboard until upstream + local_stdb are
-/// up and `initial_subscribe_complete` is true.
-async fn wait_for_relay_ready(
-    region: u32,
-    dashboard_port: u16,
-    http: &reqwest::Client,
-    shutdown: &mut std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
-) -> Result<ReadyGate> {
-    let url = format!("http://127.0.0.1:{dashboard_port}/metrics");
-    let mut backoff = READY_GATE_BACKOFF_MIN;
-    loop {
-        match http.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<serde_json::Value>().await {
-                    Ok(body) if metrics_indicate_ready(&body) => {
-                        tracing::info!(
-                            target: "relay_cache::shard",
-                            region,
-                            dashboard_port,
-                            "relay ready (upstream+stdb up, initial subscribe complete)"
-                        );
-                        return Ok(ReadyGate::Ready);
-                    }
-                    Ok(_) => {
-                        tracing::debug!(
-                            target: "relay_cache::shard",
-                            region,
-                            dashboard_port,
-                            "relay metrics not ready yet; waiting"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            target: "relay_cache::shard",
-                            region,
-                            error = %e,
-                            "metrics JSON decode failed; waiting"
-                        );
-                    }
-                }
-            }
-            Ok(resp) => {
-                tracing::debug!(
-                    target: "relay_cache::shard",
-                    region,
-                    status = %resp.status(),
-                    "metrics HTTP non-success; waiting"
-                );
-            }
-            Err(e) => {
-                tracing::debug!(
-                    target: "relay_cache::shard",
-                    region,
-                    error = %e,
-                    "metrics poll failed; waiting"
-                );
-            }
-        }
-
-        tokio::select! {
-            biased;
-            _ = &mut *shutdown => {
-                return Ok(ReadyGate::Shutdown);
-            }
-            _ = tokio::time::sleep(backoff) => {}
-        }
-        backoff = (backoff * 2).min(READY_GATE_BACKOFF_MAX);
-    }
-}
-
-fn metrics_indicate_ready(body: &serde_json::Value) -> bool {
-    let link_up = |key: &str| {
-        body.get(key)
-            .and_then(|v| v.get("state"))
-            .and_then(|s| s.as_str())
-            == Some("up")
-    };
-    let complete = body
-        .get("initial_subscribe_complete")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    link_up("upstream") && link_up("local_stdb") && complete
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1691,26 +1604,13 @@ fn touch_dimension_network(
 
 #[cfg(test)]
 mod readiness_tests {
-    use super::metrics_indicate_ready;
-    use serde_json::json;
+    use crate::discovery::mirror_row_ready;
 
     #[test]
-    fn metrics_ready_requires_all_three() {
-        assert!(!metrics_indicate_ready(&json!({})));
-        assert!(!metrics_indicate_ready(&json!({
-            "upstream": { "state": "up" },
-            "local_stdb": { "state": "up" },
-            "initial_subscribe_complete": false
-        })));
-        assert!(!metrics_indicate_ready(&json!({
-            "upstream": { "state": "up" },
-            "local_stdb": { "state": "down" },
-            "initial_subscribe_complete": true
-        })));
-        assert!(metrics_indicate_ready(&json!({
-            "upstream": { "state": "up" },
-            "local_stdb": { "state": "up" },
-            "initial_subscribe_complete": true
-        })));
+    fn mirror_ready_requires_live_and_full_tables() {
+        assert!(!mirror_row_ready(None, None, None));
+        assert!(!mirror_row_ready(Some("live"), Some(11), Some(12)));
+        assert!(!mirror_row_ready(Some("subscribing"), Some(12), Some(12)));
+        assert!(mirror_row_ready(Some("live"), Some(12), Some(12)));
     }
 }

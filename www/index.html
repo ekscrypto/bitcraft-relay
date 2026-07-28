@@ -212,12 +212,13 @@
   <header>
     <h1>relay.bitcraftsync.app</h1>
     <p class="lede">
-      A community SpacetimeDB relay/proxy for <a href="https://bitcraftonline.com" target="_blank" rel="noopener">BitCraft</a>. It holds a single
+      A community SpacetimeDB public-mirror for <a href="https://bitcraftonline.com" target="_blank" rel="noopener">BitCraft</a>. It holds a single
       persistent subscription to each upstream game region and fans it out to
-      any number of downstream clients from a sibling SpacetimeDB &mdash; so
+      any number of downstream clients &mdash; so
       community tools (BitCraftMap, BitCraftSync, BitJita, &hellip;) share one
-      upstream cost instead of each holding their own subscription.     Point your
-      SpacetimeDB SDK at the addresses below; it&rsquo;s a drop-in
+      upstream cost instead of each holding their own subscription. Point your
+      SpacetimeDB SDK at the addresses below (<code>bitcraft-live-*</code>
+      databases); it&rsquo;s a drop-in
       <code>wss://</code> replacement. New here?
       Start with the <a href="/tutorial/">step-by-step tutorial</a>
       (connect, subscribe, schema, relay-cache joins, live inventory WS), or open the
@@ -291,34 +292,34 @@
     </table>
   </div>
   <p class="section-note" style="margin-top: 10px;">
-    Status reflects each region&rsquo;s live upstream connection; throughput is
-    incoming data over the last minute; uptime is how long the current
-    upstream connection has held continuously (hover for process and
-    local-stdb uptime). Deeper per-instance metrics (disconnect reasons,
-    30-minute windows, host memory and disk) remain on each instance&rsquo;s
-    loopback dashboard and are not part of the public surface.
+    Status is each source&rsquo;s <code>connectivity</code>
+    (<code>connecting</code> / <code>subscribing</code> / <code>live</code> /
+    <code>disconnected</code>); throughput is the lifetime
+    <code>transactions_processed</code> counter; uptime is duration since
+    <code>connected_since</code> (or reconnect ETA when disconnected). Host
+    CPU / memory / network stay in the system cards above.
   </p>
 
   <!-- Section 2: SpacetimeDB relays (wss://) -->
   <h2>SpacetimeDB relays</h2>
   <p class="section-note">
-    Each row is a live mirrored region. Connect your SpacetimeDB SDK with the
-    <b>SDK address</b> as the host and the <b>Database</b> as the database name,
-    or open the full subscribe URL for raw-WebSocket testing. The frontend
-    negotiates whichever subprotocol the client offers &mdash;
-    <code>v1.bsatn.spacetimedb</code> (synthesises full upstream-flavored
-    <code>TransactionUpdate</code>s) or <code>v2.bsatn.spacetimedb</code> (plain
-    passthrough). See the
-    <a href="https://github.com/ekscrypto/spacetimedb-relay#connecting-downstream-clients" target="_blank" rel="noopener">README</a>
-    for protocol details. See also the
+    Each row is a live mirrored region served by a single public-mirror
+    backend. Databases are named <code>bitcraft-live-*</code>
+    (<code>bitcraft-live-global</code> and <code>bitcraft-live-N</code> per
+    region). Connect your SpacetimeDB SDK with the <b>SDK address</b> as the
+    host and the <b>Database</b> as the database name, or open the full
+    subscribe URL for raw-WebSocket testing. Prefer
+    <code>v1.bsatn.spacetimedb</code> when you need reducer call-stack
+    provenance; <code>v2.bsatn.spacetimedb</code> is fine for row data alone.
+    See also the
     <a href="/tutorial/">How to use the relay</a> tutorial (Python &amp; Rust)
     and the in-browser <a href="/explorer/">data explorer</a>.
-    Ports with no relay behind them return nginx
+    Ports with no source behind them return nginx
     <code>502</code>; only sources reported live by <code>/health</code> are listed.
   </p>
   <div class="banner warn">
     <b>Subscriptions only.</b> <code>OneOffQuery</code> and
-    <code>CallReducer</code> are not supported through this relay. Issuing
+    <code>CallReducer</code> are rejected through this relay. Issuing
     either will return an error immediately. Use SDK table subscriptions
     instead &mdash; subscribe to the tables your tool needs and read rows
     from the local cache. The relay is read-only.
@@ -366,7 +367,7 @@
         <tr>
           <td>
             <code>https://relay.bitcraftsync.app:&lt;port&gt;/v1/database/&lt;mirror-database&gt;/schema?version=9</code>
-            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/schema?version=9</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app:3014/v1/database/bitcraft-live-14/schema?version=9</div>
           </td>
         </tr>
       </tbody>
@@ -395,10 +396,12 @@
         <tr>
           <td><a class="ep" href="/health" target="_blank" rel="noopener">/health</a></td>
           <td>
-            Fleet source map: per-source <code>port</code>, mirror
-            <code>database</code> name, <code>schema_cached</code> flag,
-            live <code>metrics.upstream.state</code> and throughput, plus
-            the host&rsquo;s <code>system.cpu.load_average</code>,
+            Fleet source map: per-source <code>port</code>,
+            <code>database</code> name, <code>schema_cached</code>,
+            <code>connectivity</code>, <code>tables_live</code> /
+            <code>tables_total</code>, and lifetime
+            <code>transactions_processed</code>, plus the host&rsquo;s
+            <code>system.cpu.load_average</code>,
             <code>system.memory</code> (free / total), and
             <code>system.network</code> rolling rate. <code>schema_count</code>
             reflects the number of discovered sources.
@@ -564,20 +567,20 @@
   // Mirrors the live-instance table in the repo (CLAUDE.local.md). Clearly
   // marked stale when shown. Kept to the public 3000-3025 band.
   var FALLBACK_SOURCES = [
-    { name: "global",            port: 3000, database: "relay-mirror-bc-global" },
-    { name: "bitcraft-live-3",   port: 3003, database: "relay-mirror-bc3"  },
-    { name: "bitcraft-live-7",   port: 3007, database: "relay-mirror-bc7"  },
-    { name: "bitcraft-live-8",   port: 3008, database: "relay-mirror-bc8"  },
-    { name: "bitcraft-live-9",   port: 3009, database: "relay-mirror-bc9"  },
-    { name: "bitcraft-live-11",  port: 3011, database: "relay-mirror-bc11" },
-    { name: "bitcraft-live-12",  port: 3012, database: "relay-mirror-bc12" },
-    { name: "bitcraft-live-13",  port: 3013, database: "relay-mirror-bc13" },
-    { name: "bitcraft-live-14",  port: 3014, database: "relay-mirror-bc14" },
-    { name: "bitcraft-live-15",  port: 3015, database: "relay-mirror-bc15" },
-    { name: "bitcraft-live-17",  port: 3017, database: "relay-mirror-bc17" },
-    { name: "bitcraft-live-18",  port: 3018, database: "relay-mirror-bc18" },
-    { name: "bitcraft-live-19",  port: 3019, database: "relay-mirror-bc19" },
-    { name: "bitcraft-live-23",  port: 3023, database: "relay-mirror-bc23" }
+    { name: "global",            port: 3000, database: "bitcraft-live-global" },
+    { name: "bitcraft-live-3",   port: 3003, database: "bitcraft-live-3"  },
+    { name: "bitcraft-live-7",   port: 3007, database: "bitcraft-live-7"  },
+    { name: "bitcraft-live-8",   port: 3008, database: "bitcraft-live-8"  },
+    { name: "bitcraft-live-9",   port: 3009, database: "bitcraft-live-9"  },
+    { name: "bitcraft-live-11",  port: 3011, database: "bitcraft-live-11" },
+    { name: "bitcraft-live-12",  port: 3012, database: "bitcraft-live-12" },
+    { name: "bitcraft-live-13",  port: 3013, database: "bitcraft-live-13" },
+    { name: "bitcraft-live-14",  port: 3014, database: "bitcraft-live-14" },
+    { name: "bitcraft-live-15",  port: 3015, database: "bitcraft-live-15" },
+    { name: "bitcraft-live-17",  port: 3017, database: "bitcraft-live-17" },
+    { name: "bitcraft-live-18",  port: 3018, database: "bitcraft-live-18" },
+    { name: "bitcraft-live-19",  port: 3019, database: "bitcraft-live-19" },
+    { name: "bitcraft-live-23",  port: 3023, database: "bitcraft-live-23" }
   ];
 
   function el(tag, cls, html) {
@@ -786,71 +789,144 @@
     return v.toFixed(v < 10 ? 1 : 0) + units[i];
   }
 
-  // Incoming throughput (updates/s) over the upstream 1-minute window.
-  // Falls back to "—" when metrics aren't present (older /health). Only
-  // updates/s is shown: bytes/s is deliberately omitted because the
-  // upstream byte counters measure application-layer (BSATN) payload,
-  // which isn't comparable to the host NIC bandwidth shown above and
-  // invited misleading cross-comparisons.
-  function upstreamThroughput(s, stalled) {
+  function secondsSinceIso(iso) {
+    if (!iso) return null;
+    var t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    return Math.max(0, (Date.now() - t) / 1000);
+  }
+
+  // Prefer public-mirror connectivity; fall back to metrics.upstream.state
+  // during the transition (up→live, down→disconnected, else connecting).
+  function sourceConnectivity(s) {
+    if (s.connectivity) return s.connectivity;
     var up = s.metrics && s.metrics.upstream;
-    if (!up) return "";
-    var main = "", title = [];
-    if (up.units_1m != null) {
-      main = formatUnits(Math.round(up.units_1m / 60)) + " updates/s";
+    if (!up || !up.state) return null;
+    if (up.state === "up") return "live";
+    if (up.state === "down") return "disconnected";
+    return "connecting";
+  }
+
+  // Status pill from connectivity. Live with tables_live < tables_total
+  // is warn (partial subscribe). Legacy stalled (up + 0 units_1m) kept.
+  function statusPill(s) {
+    var conn = sourceConnectivity(s);
+    var cls, label, pillTitle;
+    if (conn === "live") {
+      var live = s.tables_live, total = s.tables_total;
+      if (live != null && total != null && live < total) {
+        cls = "warn"; label = "live";
+        pillTitle = "live but tables " + live + "/" + total;
+      } else {
+        cls = "up"; label = "live";
+        pillTitle = total != null ? "live · tables " + (live != null ? live : total) + "/" + total : "live";
+      }
+    } else if (conn === "connecting" || conn === "subscribing") {
+      cls = "warn"; label = conn;
+      pillTitle = conn;
+    } else if (conn === "disconnected") {
+      cls = "bad"; label = "disconnected";
+      pillTitle = "disconnected";
+    } else {
+      // No connectivity and no legacy metrics — assume down.
+      var up = s.metrics && s.metrics.upstream;
+      if (up && up.state === "up" && up.units_1m === 0) {
+        cls = "warn"; label = "stalled";
+        pillTitle = "upstream up but 0 updates in the last 60s";
+      } else if (up && up.state === "up") {
+        cls = "up"; label = "up";
+        pillTitle = "upstream: up (legacy metrics)";
+      } else if (up && up.state === "down") {
+        cls = "bad"; label = "down";
+        pillTitle = "upstream: down (legacy metrics)";
+      } else if (up && up.state) {
+        cls = "warn"; label = up.state;
+        pillTitle = "upstream: " + up.state + " (legacy metrics)";
+      } else {
+        cls = "bad"; label = "down";
+        pillTitle = "no connectivity reported";
+      }
     }
-    if (stalled) {
-      title.push("stalled: 0 updates in the last 60s");
+    return '<span class="pill ' + cls + '" title="' + escapeHtml(pillTitle) +
+      '">' + escapeHtml(label) + "</span>";
+  }
+
+  // Throughput: prefer lifetime transactions_processed; fall back to
+  // legacy metrics.upstream units_1m → updates/s.
+  function throughputCell(s) {
+    if (s.transactions_processed != null) {
+      var title = "lifetime transactions processed";
+      if (s.tables_live != null && s.tables_total != null) {
+        title += "\ntables " + s.tables_live + "/" + s.tables_total;
+      }
+      return '<span class="mono" title="' + escapeHtml(title) + '">' +
+        formatUnits(s.transactions_processed) + " tx</span>";
     }
+    var up = s.metrics && s.metrics.upstream;
+    if (!up || up.units_1m == null) return "";
+    var stalled = up.state === "up" && up.units_1m === 0;
+    var main = formatUnits(Math.round(up.units_1m / 60)) + " updates/s";
+    var parts = [];
+    if (stalled) parts.push("stalled: 0 updates in the last 60s");
     if (up.units_5m != null) {
-      title.push("5-min avg: " + Math.round(up.units_5m / 300) + " updates/s");
+      parts.push("5-min avg: " + Math.round(up.units_5m / 300) + " updates/s");
     }
     var style = stalled ? ' style="color: var(--warn);"' : "";
-    return main ? '<span class="mono"' + style + ' title="' +
-      escapeHtml(title.join("\n")) + '">' + main + "</span>" : "";
+    return '<span class="mono"' + style + ' title="' +
+      escapeHtml(parts.join("\n")) + '">' + main + "</span>";
   }
 
-  // Stall detection: a relay is "stalled" when its upstream connection
-  // reports "up" but delivered zero updates in the last minute — the socket
-  // is open but no data is flowing, a silent failure mode that plain "up"
-  // hides and which is an error condition for downstream clients. Startup
-  // is not a concern: a freshly-launched relay reports the "initial" state,
-  // not "up", so any source we see as "up" with zero throughput is
-  // genuinely stalled. Returns null when not stalled or when units aren't
-  // reported (legacy /health) — callers treat null as "not stalled".
-  function upstreamStalled(s) {
-    var up = s.metrics && s.metrics.upstream;
-    if (!up || up.state !== "up") return null;
-    if (up.units_1m == null) return null;            // not measured → unknown
-    if (up.units_1m === 0) {
-      return { units_1m: 0, units_5m: up.units_5m };
-    }
-    return null;
-  }
-
-  // Uptime column: headline is how long the current upstream connection has
-  // held continuously — the most operationally meaningful "is data flowing"
-  // signal. When upstream is down we show the local-stdb uptime instead
-  // (still useful: it shows whether the mirror is independently healthy),
-  // and fall back to the process uptime. Hover gives the full breakdown of
-  // all three, with last-down timestamps and disconnect reasons when known.
+  // Uptime: prefer connected_since → duration; when disconnected show
+  // next_attempt_eta_secs / disconnected_since. Fall back to legacy
+  // metrics uptime when connectivity fields are absent.
   function uptimeCell(s) {
+    var conn = sourceConnectivity(s);
+    var parts = [];
+    var main = "—";
+
+    if (s.connected_since || s.disconnected_since != null ||
+        s.next_attempt_eta_secs != null || conn) {
+      if (conn === "disconnected" || (!s.connected_since &&
+          (s.disconnected_since || s.next_attempt_eta_secs != null))) {
+        if (s.next_attempt_eta_secs != null) {
+          main = "retry in " + formatDuration(s.next_attempt_eta_secs);
+          parts.push("next attempt in " + formatDuration(s.next_attempt_eta_secs));
+        } else {
+          main = "disconnected";
+        }
+        if (s.disconnected_since) {
+          var downFor = secondsSinceIso(s.disconnected_since);
+          parts.push("disconnected since " +
+            new Date(s.disconnected_since).toLocaleString() +
+            (downFor != null ? " (" + formatDuration(downFor) + ")" : ""));
+          if (main === "disconnected" && downFor != null) {
+            main = formatDuration(downFor) + " down";
+          }
+        }
+      } else if (s.connected_since) {
+        var upFor = secondsSinceIso(s.connected_since);
+        main = formatDuration(upFor);
+        parts.push("connected since " +
+          new Date(s.connected_since).toLocaleString());
+      } else if (conn === "connecting" || conn === "subscribing") {
+        main = conn;
+        parts.push(conn);
+      }
+      return '<span class="mono" title="' + escapeHtml(parts.join("\n")) + '">' +
+        escapeHtml(main) + "</span>";
+    }
+
+    // Legacy metrics path (no connectivity fields).
     var m = s.metrics || {};
     var proc = m.process_uptime_seconds;
     var up = m.upstream || {};
     var ls = m.local_stdb || {};
-    var main, parts = [];
-
     var upUptime = (up.state === "up") ? up.uptime_seconds : null;
     var lsUptime = (ls.state === "up") ? ls.uptime_seconds : null;
 
-    if (upUptime != null) {
-      main = formatDuration(upUptime);
-    } else if (lsUptime != null) {
-      main = formatDuration(lsUptime);
-    } else {
-      main = formatDuration(proc);
-    }
+    if (upUptime != null) main = formatDuration(upUptime);
+    else if (lsUptime != null) main = formatDuration(lsUptime);
+    else main = formatDuration(proc);
 
     parts.push("process: " + formatDuration(proc));
     if (upUptime != null) {
@@ -892,95 +968,74 @@
       tr.appendChild(el("td", "src", escapeHtml(s.name)));
       tr.appendChild(el("td", "num mono", String(s.port)));
       tr.appendChild(el("td", "mono hide-sm", escapeHtml(s.database || "—")));
-
-      // Status: driven by the live upstream (and local-stdb) connection
-      // state, not by schema cache. "up" requires both links up; "down"
-      // if either is down or if no state is reported at all (a source
-      // with no metrics is assumed down, not initialising); "stalled"
-      // (warn) when both links are up but upstream delivered zero updates
-      // in the last minute — an error condition we surface over the plain
-      // "up"; otherwise "initial" only when a partial/ transitional state
-      // is present.
-      var m = s.metrics || {};
-      var upState = (m.upstream && m.upstream.state) || "";
-      var lsState = (m.local_stdb && m.local_stdb.state) || "";
-      var stalled = upstreamStalled(s);
-      var state, cls, label, pillTitle;
-      if (upState === "up" && lsState === "up") {
-        if (stalled) {
-          state = "stalled"; cls = "warn"; label = "stalled";
-          pillTitle = "upstream socket is up but delivered 0 updates in the last 60s\n" +
-            "(upstream: up\nlocal_stdb: up)";
-        } else {
-          state = "up"; cls = "up"; label = "up";
-          pillTitle = "upstream: up\nlocal_stdb: up";
-        }
-      } else if (upState === "down" || lsState === "down") {
-        state = "down"; cls = "bad"; label = "down";
-        pillTitle = "upstream: " + (upState || "—") + "\nlocal_stdb: " + (lsState || "—");
-      } else if (!upState && !lsState) {
-        // No state reported at all — assume down rather than initialising.
-        state = "down"; cls = "bad"; label = "down";
-        pillTitle = "upstream: —\nlocal_stdb: —";
-      } else {
-        state = "initial"; cls = "warn"; label = upState || lsState || "initial";
-        pillTitle = "upstream: " + (upState || "—") + "\nlocal_stdb: " + (lsState || "—");
-      }
-      tr.appendChild(el("td", null,
-        '<span class="pill ' + cls + '" title="' + escapeHtml(pillTitle) +
-        '">' + escapeHtml(label) + "</span>"));
-
-      tr.appendChild(el("td", "num hide-sm", upstreamThroughput(s, stalled)));
+      tr.appendChild(el("td", null, statusPill(s)));
+      tr.appendChild(el("td", "num hide-sm", throughputCell(s)));
       tr.appendChild(el("td", "num", uptimeCell(s)));
       healthBody.appendChild(tr);
     });
 
-    // Overall header pill: reflects real up/down/stalled across all sources,
-    // derived from upstream/local_stdb state. A source with no reported
-    // metrics is counted as down, not initialising — so a partially-down
-    // fleet reports the down count rather than "connecting". A stalled
-    // source (up but zero throughput) counts separately and is surfaced as
-    // a warn-tier issue only when nothing is fully down. Priority on the
-    // header pill: down > stalled > connecting > all-up.
-    var upCount = 0, downCount = 0, stalledCount = 0, hasMetrics = false;
+    // Overall: all live = good; any disconnected = bad; mixed connecting = warn.
+    var liveCount = 0, disconnectedCount = 0, connectingCount = 0;
+    var partialLive = 0, hasConnectivity = false, legacyStalled = 0;
     sources.forEach(function (s) {
-      var m = s.metrics && s.metrics.upstream;
-      if (!m) {
-        // No metrics → assume down.
-        downCount++;
+      var conn = sourceConnectivity(s);
+      if (conn) {
+        hasConnectivity = true;
+        if (conn === "live") {
+          var live = s.tables_live, total = s.tables_total;
+          if (live != null && total != null && live < total) partialLive++;
+          else liveCount++;
+        } else if (conn === "disconnected") {
+          disconnectedCount++;
+        } else {
+          connectingCount++;
+        }
         return;
       }
-      hasMetrics = true;
-      if (m.state === "down") {
-        downCount++;
-      } else if (m.state === "up") {
-        if (upstreamStalled(s)) stalledCount++;
-        else upCount++;
+      // Legacy metrics-only source.
+      var up = s.metrics && s.metrics.upstream;
+      if (!up) {
+        disconnectedCount++;
+        return;
+      }
+      hasConnectivity = true;
+      if (up.state === "down") disconnectedCount++;
+      else if (up.state === "up") {
+        if (up.units_1m === 0) legacyStalled++;
+        else liveCount++;
+      } else {
+        connectingCount++;
       }
     });
     srcCount.textContent = String(schemaCount != null ? schemaCount : sources.length);
-    if (hasMetrics || downCount > 0) {
-      if (downCount === 0 && upCount === sources.length) {
+    if (hasConnectivity || disconnectedCount > 0) {
+      if (disconnectedCount === 0 && connectingCount === 0 &&
+          partialLive === 0 && legacyStalled === 0 &&
+          liveCount === sources.length) {
         overallPill.className = "pill up";
-        overallPill.textContent = "all up";
+        overallPill.textContent = "all live";
         overallText.textContent = "every region’s upstream connection is live.";
-      } else if (downCount > 0) {
+      } else if (disconnectedCount > 0) {
         overallPill.className = "pill bad";
-        overallPill.textContent = downCount + " down";
-        overallText.textContent = downCount + " of " + sources.length +
-          " sources report a down upstream connection.";
-      } else if (stalledCount > 0) {
+        overallPill.textContent = disconnectedCount + " disconnected";
+        overallText.textContent = disconnectedCount + " of " + sources.length +
+          " sources are disconnected.";
+      } else if (legacyStalled > 0) {
         overallPill.className = "pill warn";
-        overallPill.textContent = stalledCount + " stalled";
-        overallText.textContent = stalledCount + " of " + sources.length +
+        overallPill.textContent = legacyStalled + " stalled";
+        overallText.textContent = legacyStalled + " of " + sources.length +
           " sources are up but delivering no updates.";
+      } else if (partialLive > 0) {
+        overallPill.className = "pill warn";
+        overallPill.textContent = partialLive + " catching up";
+        overallText.textContent = partialLive + " of " + sources.length +
+          " sources are live but still loading tables.";
       } else {
         overallPill.className = "pill warn";
         overallPill.textContent = "connecting";
-        overallText.textContent = "one or more sources are still initialising.";
+        overallText.textContent = "one or more sources are still connecting or subscribing.";
       }
     } else {
-      // Legacy /health without metrics — keep a neutral pill.
       overallPill.className = "pill " + (sources.length ? "up" : "bad");
       overallPill.textContent = sources.length ? "listed" : "no sources";
       overallText.textContent = "";
@@ -1030,6 +1085,15 @@
               port: s.port,
               database: s.database,
               schema_cached: s.schema_cached === true,
+              connectivity: s.connectivity || null,
+              tables_live: s.tables_live != null ? s.tables_live : null,
+              tables_total: s.tables_total != null ? s.tables_total : null,
+              transactions_processed: s.transactions_processed != null
+                ? s.transactions_processed : null,
+              connected_since: s.connected_since || null,
+              disconnected_since: s.disconnected_since || null,
+              next_attempt_eta_secs: s.next_attempt_eta_secs != null
+                ? s.next_attempt_eta_secs : null,
               metrics: s.metrics || null
             });
           });

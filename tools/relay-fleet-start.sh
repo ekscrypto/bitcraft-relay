@@ -1,124 +1,110 @@
 #!/bin/sh
-# relay-fleet-start.sh — sequentially start the relay fleet.
+# relay-fleet-start.sh — start public-mirror and wait until mirrors are live.
 #
-# Prevents a thundering herd: without this, all relay-bc* instances start
-# in parallel at boot or on a bulk restart, which is survivable in the
-# cached (no-schema-change) path but OOMs the box on schema drift
-# (every region runs codegen + cargo build at ~2.8 GiB peak each).
-#
-# Run as root (calls systemctl). Invoked by relay-fleet-sequencer.service
-# at boot, or manually after a binary update / bulk stop.
+# Thin wrapper around `systemctl start public-mirror.service`. The old
+# sequential per-relay start (relay-global, then relay-bc* by ascending
+# region ID) is retired: one public-mirror process mirrors every region,
+# so there is no thundering-herd / overlapping-codegen concern to
+# serialize.
 #
 # Behavior:
-#   1. Verify the relay binary exists (each relay spawns its own stdb
-#      via --stdb-spawn; there is no shared stdb pre-flight check).
-#   2. Start relay-global, then each relay-bc* region in ascending ID
-#      order, one at a time. For each: start it, then poll its dashboard
-#      /metrics until upstream.state == "up" before starting the next.
-#      This serializes the build peaks so they never overlap.
-#   3. Idempotent: a region already "up" is skipped — safe to re-run any
-#      time. A region that times out is logged and skipped; we don't
-#      block the whole fleet on one stuck region.
+#   1. systemctl start public-mirror.service (idempotent if already active).
+#   2. Poll GET /v1/mirrors until every reported mirror has
+#      connectivity=live, or until timeout.
+#   3. Non-zero exit on timeout or unreachable endpoint after timeout.
+#
+# The old relay-bc* / relay-global / relay-fleet-sequencer units are
+# retired — do not start them. Prefer this script (or
+# `systemctl start public-mirror.service` directly).
+#
+# Env knobs (defaults shown):
+#   MIRRORS_URL=http://127.0.0.1:3000/v1/mirrors
+#   FLEET_READY_SECS=600          overall wait budget
+#   FLEET_POLL_SECS=5             poll interval
+#   FLEET_CURL_TIMEOUT=4          per-fetch timeout
+#   FLEET_MIN_MIRRORS=1           require at least this many mirrors
+#                                 before treating an all-live snapshot
+#                                 as success (guards empty early responses)
 #
 # Requires: curl, python3, systemctl. No write side effects beyond
 # `systemctl start`.
 
 set -u
 
-RELAY_BIN=/srv/relay/spacetimedb-relay/target/release/relay
-RELAY_READY_secs=600    # schema-drift path runs cargo build: ~5-7 min
-POLL_interval=5
+MIRRORS_URL="${MIRRORS_URL:-http://127.0.0.1:3000/v1/mirrors}"
+READY_SECS="${FLEET_READY_SECS:-600}"
+POLL_SECS="${FLEET_POLL_SECS:-5}"
+CURL_TIMEOUT="${FLEET_CURL_TIMEOUT:-4}"
+MIN_MIRRORS="${FLEET_MIN_MIRRORS:-1}"
+UNIT=public-mirror.service
 
-log() { echo "relay-fleet-sequencer: $*"; }
+log() { echo "relay-fleet-start: $*"; }
 
-# Extract the dashboard port for a unit from its unit file.
-dash_port() {
-    grep -oE 'dashboard-bind 127\.0\.0\.1:[0-9]+' "/etc/systemd/system/$1.service" 2>/dev/null \
-        | grep -oE '[0-9]+$' | head -1
-}
-
-# Check that the relay binary exists (each relay spawns its own stdb).
-check_relay_bin() {
-    if [ -x "$RELAY_BIN" ]; then
-        log "relay binary found: $RELAY_BIN"
-        return 0
+# Returns 0 if /v1/mirrors reports >= MIN_MIRRORS entries and every one
+# is connectivity=live. Prints a short status summary on stdout.
+mirrors_all_live() {
+    json=$(curl -sS --max-time "$CURL_TIMEOUT" "$MIRRORS_URL" 2>/dev/null || true)
+    if [ -z "$json" ]; then
+        echo "unreachable"
+        return 1
     fi
-    log "ERROR: relay binary not found or not executable: $RELAY_BIN — aborting fleet start."
-    return 1
-}
-
-# Is a relay already up? Queries its dashboard /metrics.
-relay_state() {
-    port=$(dash_port "$1")
-    [ -z "$port" ] && { echo "unknown"; return; }
-    curl -s --max-time 4 "http://127.0.0.1:${port}/metrics" 2>/dev/null \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['upstream']['state'])" 2>/dev/null || echo "unknown"
-}
-
-# Start one relay and block until its upstream is "up" (or timeout).
-# Returns 0 on up, 1 on timeout.
-start_relay() {
-    unit="$1"
-    state=$(relay_state "$unit")
-    if [ "$state" = "up" ]; then
-        log "  $unit: already up — skipping."
-        return 0
-    fi
-    log "  $unit: starting (current state: $state)…"
-    systemctl start "$unit" 2>&1 | sed 's/^/    /'
-    # Poll for upstream.state == up.
-    elapsed=0
-    while [ "$elapsed" -lt "$RELAY_READY_secs" ]; do
-        sleep "$POLL_interval"
-        elapsed=$((elapsed + POLL_interval))
-        state=$(relay_state "$unit")
-        if [ "$state" = "up" ]; then
-            log "  $unit: up after ${elapsed}s."
-            return 0
-        fi
-    done
-    log "  $unit: TIMEOUT after ${RELAY_READY_secs}s (state=$state) — moving on."
-    return 1
-}
-
-# Discover relay units in start order: global first, then regions by ID.
-discover_units() {
-    for f in /etc/systemd/system/relay-*.service; do
-        [ -e "$f" ] || continue
-        name=$(basename "$f" .service)
-        case "$name" in
-            relay-stdb) continue ;;  # legacy; unused with --stdb-spawn
-            relay-fleet-sequencer) continue ;;
-            relay-coordinator) continue ;;
-            relay-global) echo "0global $name" ;;
-            relay-bc*)    echo "$(echo "$name" | sed 's/relay-bc//') $name" ;;
-            *)            echo "999 $name" ;;
-        esac
-    done | sort -n | awk '{print $2}'
+    printf '%s' "$json" | MIN_MIRRORS="$MIN_MIRRORS" python3 -c '
+import json, os, sys
+min_n = int(os.environ.get("MIN_MIRRORS") or "1")
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("parse_error")
+    raise SystemExit(1)
+mirrors = d.get("mirrors") or []
+n = len(mirrors)
+if n < min_n:
+    print("waiting count=%d need>=%d" % (n, min_n))
+    raise SystemExit(1)
+not_live = []
+for m in mirrors:
+    conn = m.get("connectivity") or "?"
+    db = m.get("database") or "?"
+    if conn != "live":
+        not_live.append("%s=%s" % (db, conn))
+if not_live:
+    # Cap the summary so the log line stays readable.
+    shown = not_live[:6]
+    extra = "" if len(not_live) <= 6 else " (+%d more)" % (len(not_live) - 6)
+    print("partial live=%d/%d pending=%s%s" % (
+        n - len(not_live), n, ",".join(shown), extra))
+    raise SystemExit(1)
+print("all %d mirrors live" % n)
+raise SystemExit(0)
+'
 }
 
 # --- main ---
 
-check_relay_bin || exit 1
+log "starting $UNIT (legacy relay-bc* / relay-global units are retired)"
+systemctl start "$UNIT" 2>&1 | sed 's/^/  /'
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    log "ERROR: systemctl start $UNIT failed (exit $rc)"
+    exit 1
+fi
 
-ok=0
-timed_out=0
-timed_out_list=""
-total=0
-
-log "starting relays sequentially (global first, then regions by ID)…"
-for unit in $(discover_units); do
-    total=$((total + 1))
-    if start_relay "$unit"; then
-        ok=$((ok + 1))
-    else
-        timed_out=$((timed_out + 1))
-        timed_out_list="$timed_out_list $unit"
+log "waiting up to ${READY_SECS}s for all mirrors live at $MIRRORS_URL (min_mirrors=$MIN_MIRRORS)…"
+elapsed=0
+last_status=""
+while [ "$elapsed" -lt "$READY_SECS" ]; do
+    status=$(mirrors_all_live 2>/dev/null) && {
+        log "ready after ${elapsed}s: $status"
+        exit 0
+    }
+    status=${status:-unreachable}
+    if [ "$status" != "$last_status" ]; then
+        log "  ${elapsed}s: $status"
+        last_status=$status
     fi
+    sleep "$POLL_SECS"
+    elapsed=$((elapsed + POLL_SECS))
 done
 
-log "done: $ok/$total up, $timed_out timed out.${timed_out_list:+  Timed out:}${timed_out_list}"
-# Non-zero exit if anything timed out, so oneshot failure is visible to
-# systemd/journald — but RemainAfterExit=yes keeps the unit "active" so
-# boot still completes and the stalled regions retry via their own Restart=.
-[ "$timed_out" -eq 0 ] || exit 1
+log "TIMEOUT after ${READY_SECS}s (last: ${last_status:-unknown})"
+exit 1
