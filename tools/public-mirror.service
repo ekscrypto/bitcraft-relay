@@ -7,8 +7,11 @@
 #
 # Upstream auth: reuse the existing fleet EnvironmentFile
 # `/etc/relay/upstream.env` (`RELAY_UPSTREAM_TOKEN=…`). The standalone binary
-# accepts that env name. SpacetimeDB JWT keypair for the local listen is
-# separate (`--jwt-*-path` below). Edit drop-ins for the live region set.
+# accepts that env name. Local SpacetimeDB JWT keys are NOT a new secret —
+# stock standalone needs them to issue client identities; use the same
+# `spacetime` CLI keypair the old --stdb-spawn children already used
+# (`/srv/relay/.config/spacetime/id_ecdsa{,.pub}`). Edit drop-ins for the
+# live region set.
 [Unit]
 Description=spacetimedb-public-mirror (BitCraft multi-region)
 After=network-online.target
@@ -24,8 +27,7 @@ EnvironmentFile=-/etc/relay/upstream.env
 ExecStart=/srv/relay/spacetimedb-public-mirror/target/release/spacetimedb-standalone start \
     --data-dir /var/lib/relay/public-mirror \
     --listen-addr 127.0.0.1:3000 \
-    --jwt-pub-key-path /etc/relay/id_ecdsa.pub \
-    --jwt-priv-key-path /etc/relay/id_ecdsa \
+    --jwt-key-dir /srv/relay/.config/spacetime \
     --public-mirror-v1 \
     --non-interactive \
     --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-global \
