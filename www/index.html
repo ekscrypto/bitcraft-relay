@@ -884,8 +884,12 @@
     var parts = [];
     var main = "—";
 
-    if (s.connected_since || s.disconnected_since != null ||
-        s.next_attempt_eta_secs != null || conn) {
+    // Public-mirror path: only when /health carried explicit connectivity
+    // fields. Legacy relay metrics derive conn as "live" but must still use
+    // the metrics uptime branch below.
+    if (s.connectivity || s.connected_since || s.disconnected_since != null ||
+        s.next_attempt_eta_secs != null) {
+      conn = s.connectivity || conn;
       if (conn === "disconnected" || (!s.connected_since &&
           (s.disconnected_since || s.next_attempt_eta_secs != null))) {
         if (s.next_attempt_eta_secs != null) {
