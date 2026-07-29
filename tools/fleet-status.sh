@@ -1,109 +1,151 @@
 #!/bin/sh
-# fleet-status.sh — print a one-line-per-mirror status table from the
-# public-mirror process on this host.
+# fleet-status.sh — print a one-line-per-instance sync status table for
+# every relay-* service on this host.
 #
-# Polls GET /v1/mirrors on the single public-mirror listen
-# (default http://127.0.0.1:3000/v1/mirrors). Override with MIRRORS_URL.
-# The old per-unit relay-bc* / relay-global dashboard scrapes are retired
-# — one process serves every region.
+# Run on the relay host (`relay.bitcraftsync.app`) as any user that can
+# read /etc/systemd/system/relay-*.service. Auto-discovers units, so it
+# stays correct as regions are added/removed.
 #
-# Columns: database, connectivity, tables_live/tables_total,
-# transactions_processed, next_attempt_eta_secs.
-#
-# Exit status (one-shot mode only):
-#   0  every mirror is connectivity=live AND tables_live==tables_total
-#   1  endpoint unreachable, empty fleet, or any mirror not fully live
-#      (unless --allow-partial, which always exits 0 after printing)
+# Each instance's dashboard port is read from its `--dashboard-bind`
+# flag; the JSON snapshot at `/metrics` gives the sync state. Region
+# list and ports are never hardcoded.
 #
 # Usage:
-#   ./tools/fleet-status.sh                # one-shot table
-#   ./tools/fleet-status.sh --allow-partial
-#   ./tools/fleet-status.sh -w             # repeat every 5s until Ctrl-C
-#   MIRRORS_URL=http://127.0.0.1:3000/v1/mirrors ./tools/fleet-status.sh
+#   ./tools/fleet-status.sh             # one-shot table
+#   ./tools/fleet-status.sh -w          # repeat every 5s until Ctrl-C
+#   DASH_ONLY=1 ./tools/fleet-status.sh # only units with a live dashboard
 #
-# Requires: curl, python3. No write side effects.
+# Requires: curl, python3, systemctl. No write side effects.
 
 set -eu
 
 INTERVAL="${FLEET_INTERVAL:-5}"
-MIRRORS_URL="${MIRRORS_URL:-http://127.0.0.1:3000/v1/mirrors}"
-CURL_TIMEOUT="${FLEET_CURL_TIMEOUT:-4}"
-ALLOW_PARTIAL=0
-WATCH=0
+UNIT_DIR="${FLEET_UNIT_DIR:-/etc/systemd/system}"
+ONLY_DASH="${DASH_ONLY:-0}"
 
-for arg in "$@"; do
-    case "$arg" in
-        -w|--watch)         WATCH=1 ;;
-        --allow-partial)    ALLOW_PARTIAL=1 ;;
-        -h|--help)
-            sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
-            exit 0
-            ;;
-        *)
-            echo "fleet-status: unknown argument: $arg" >&2
-            echo "Usage: $0 [-w|--watch] [--allow-partial]" >&2
-            exit 2
-            ;;
-    esac
-done
-
-# Fetch /v1/mirrors, print the table, exit 0/1 based on readiness.
-# When ALLOW_PARTIAL=1, always exit 0 after printing (used by -w).
-emit() {
-    json=$(curl -sS --max-time "$CURL_TIMEOUT" "$MIRRORS_URL" 2>/dev/null || true)
-    printf '%s' "${json:-}" | ALLOW_PARTIAL="$ALLOW_PARTIAL" python3 -c '
-import json, os, sys
-
-allow = os.environ.get("ALLOW_PARTIAL") == "1"
-
-print("%-28s %-14s %12s %22s %10s" % (
-    "DATABASE", "CONNECTIVITY", "TABLES", "TX_PROCESSED", "ETA_SECS"))
-
-raw = sys.stdin.read()
-if not raw.strip():
-    print("%-28s %-14s %12s %22s %10s" % ("-", "unreachable", "-", "-", "-"))
-    raise SystemExit(0 if allow else 1)
-
-try:
-    d = json.loads(raw)
-except Exception:
-    print("%-28s %-14s %12s %22s %10s" % ("-", "parse_error", "-", "-", "-"))
-    raise SystemExit(0 if allow else 1)
-
-mirrors = d.get("mirrors") or []
-if not mirrors:
-    print("%-28s %-14s %12s %22s %10s" % ("-", "empty", "-", "-", "-"))
-    raise SystemExit(0 if allow else 1)
-
-partial = 0
-for m in mirrors:
-    db = m.get("database") or "?"
-    conn = m.get("connectivity") or "?"
-    live = int(m.get("tables_live") or 0)
-    total = int(m.get("tables_total") or 0)
-    tx = m.get("transactions_processed")
-    tx = 0 if tx is None else int(tx)
-    eta = m.get("next_attempt_eta_secs")
-    eta_s = "-" if eta is None else str(eta)
-    print("%-28s %-14s %12s %22s %10s" % (
-        db, conn, "%d/%d" % (live, total), tx, eta_s))
-    if conn != "live" or live != total:
-        partial += 1
-
-raise SystemExit(0 if (allow or partial == 0) else 1)
-'
+# Discover relay units (relay-global, relay-bc<N>, …). Sort global first,
+# then numeric by region ID. Skips a legacy `relay-stdb` unit name if
+# present — production uses per-relay `--stdb-spawn`, not a shared stdb.
+discover() {
+    for f in "$UNIT_DIR"/relay-*.service; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f" .service)
+        case "$name" in
+            relay-stdb) continue ;;  # legacy; unused with --stdb-spawn
+            relay-global) echo "0global $name" ;;
+            relay-bc*)    echo "$(echo "$name" | sed 's/relay-bc//') $name" ;;
+            *)            echo "999 $name" ;;  # unknown shape, show last
+        esac
+    done | sort -n | awk '{print $2}'
 }
 
-if [ "$WATCH" = "1" ]; then
+# dashboard port for a unit: parse `--dashboard-bind 127.0.0.1:PORT`
+# from its unit file. Empty string if the unit has no dashboard.
+dash_port() {
+    grep -oE 'dashboard-bind 127\.0\.0\.1:[0-9]+' "$UNIT_DIR/$1.service" 2>/dev/null \
+        | grep -oE '[0-9]+$' | head -1
+}
+
+# frontend port for a unit (for display). The bind host varies by
+# deployment: `0.0.0.0` when the proxy faces the public directly,
+# `127.0.0.1` when nginx terminates TLS in front of it. Match either.
+frontend_port() {
+    grep -oE 'frontend-bind (0\.0\.0\.0|127\.0\.0\.1):[0-9]+' "$UNIT_DIR/$1.service" 2>/dev/null \
+        | grep -oE '[0-9]+$' | head -1
+}
+
+# region label from the unit name (relay-bc7 -> 7, relay-global -> global).
+label() {
+    case "$1" in
+        relay-global) echo "global" ;;
+        relay-bc*)    echo "$1" | sed 's/relay-bc//' ;;
+        *)            echo "$1" | sed 's/relay-//' ;;
+    esac
+}
+
+print_once() {
+    # Header. UPTIME is how long the upstream link has been continuously
+    # up (now - upstream.last_up_at); "-" when not currently up.
+    printf '%-7s %-15s %-9s %10s %-7s %10s %9s %-9s %-6s %s\n' \
+        REGION UNIT FRONTEND UPSTREAM UPTIME U_BYTES_1M U_UNITS_1M STDB PUBLISH NOTES
+    for unit in $(discover); do
+        port=$(dash_port "$unit")
+        lbl=$(label "$unit")
+        fport=$(frontend_port "$unit")
+        fport_disp=${fport:-"-"}
+        if [ -z "$port" ]; then
+            if [ "$ONLY_DASH" = "1" ]; then continue; fi
+            printf '%-7s %-15s %-9s %-9s %-7s %10s %10s %-9s %-6s %s\n' \
+                "$lbl" "$unit" "$fport_disp" "-" "-" "-" "-" "-" "-" "no dashboard"
+            continue
+        fi
+        json=$(curl -s --max-time 4 "http://127.0.0.1:${port}/metrics" 2>/dev/null || true)
+        if [ -z "$json" ]; then
+            printf '%-7s %-15s %-9s %-9s %-7s %10s %10s %-9s %-6s %s\n' \
+                "$lbl" "$unit" "$fport_disp" "-" "-" "-" "-" "-" "-" "dashboard unreachable"
+            continue
+        fi
+        # Pull the fields we care about. python3 because it's already a
+        # dependency on this host and JSON parsing in pure sh is painful.
+        PYARGS=$(printf '%s' "$json")
+        python3 - "$PYARGS" "$lbl" "$unit" "$fport_disp" <<'PY'
+import json, sys, datetime
+d = json.loads(sys.argv[1])
+lbl, unit, fport = sys.argv[2], sys.argv[3], sys.argv[4]
+u = d.get("upstream", {})
+l = d.get("local_stdb", {})
+p = d.get("publisher", {})
+notes = []
+if u.get("state") != "up":
+    notes.append("upstream=%s" % u.get("state"))
+if l.get("state") != "up":
+    notes.append("stdb=%s" % l.get("state"))
+mdc = l.get("module_death_count", 0)
+if mdc:
+    notes.append("module_deaths=%d" % mdc)
+reason = u.get("last_disconnect_reason")
+if reason:
+    notes.append("last_reason=%s" % reason)
+def mb(b): return "%.1fM" % (b/1e6) if b is not None else "-"
+def uptime(d):
+    # Stable upstream duration: now - upstream.last_up_at, but only
+    # meaningful while currently up. last_up_at is the epoch-seconds
+    # timestamp the link last transitioned to up.
+    if d.get("upstream", {}).get("state") != "up":
+        return "-"
+    now = d.get("now")
+    since = d.get("upstream", {}).get("last_up_at")
+    if not now or not since:
+        return "?"
+    secs = int(now) - int(since)
+    if secs < 0:
+        return "?"
+    if secs < 60:
+        return "%ds" % secs
+    if secs < 3600:
+        return "%dm" % (secs // 60)
+    if secs < 86400:
+        return "%.1fh" % (secs / 3600)
+    return "%.1fd" % (secs / 86400)
+pub = "repub" if p.get("republished_this_run") else "cached"
+print("%-7s %-15s %-9s %-9s %-7s %10s %10s %-9s %-6s %s" % (
+    lbl, unit, fport,
+    u.get("state","?"),
+    uptime(d),
+    mb(u.get("bytes_1m")), (str(u.get("units_1m",0)) if u.get("units_1m") is not None else "-"),
+    l.get("state","?"), pub, ", ".join(notes)))
+PY
+    done
+}
+
+if [ "${1:-}" = "-w" ] || [ "${1:-}" = "--watch" ]; then
     while :; do
         clear 2>/dev/null || true
-        echo "public-mirror fleet status — $(date '+%Y-%m-%d %H:%M:%S')  (refresh ${INTERVAL}s, Ctrl-C to quit)"
-        echo "source: $MIRRORS_URL"
+        echo "relay fleet status — $(date '+%Y-%m-%d %H:%M:%S')  (refresh ${INTERVAL}s, Ctrl-C to quit)"
         echo
-        # Watch mode always allows partial so the loop keeps going.
-        ALLOW_PARTIAL=1 emit || true
+        print_once
         sleep "$INTERVAL"
     done
 else
-    emit
+    print_once
 fi

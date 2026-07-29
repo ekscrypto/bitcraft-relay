@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-//! `relay-cache` — same-host in-memory read cache over public-mirror.
+//! `relay-cache` — same-host in-memory read cache over the relay fleet.
 //!
-//! Holds one long-lived v2 subscription per regional database on the
-//! local public-mirror listen address, decodes BSATN rows into columnar
-//! in-memory storage (no JSON hop on the read path), and serves HTTP
-//! queries on loopback (JSON default; protobuf via
-//! `Accept: application/x-protobuf`):
+//! Holds one long-lived v2 subscription per region frontend on loopback,
+//! decodes BSATN rows into columnar in-memory storage (no JSON hop on the
+//! read path), and serves HTTP queries on loopback (JSON default;
+//! protobuf via `Accept: application/x-protobuf`):
 //!   1. claim by PK / name substring (PK includes supplies/upkeep/tier)
 //!   2. claim inventory rollup by building + dimension
 //!   3. claim members (roles + skills + hexcoins; `/citizens` + `/hexcoins` are aliases)
@@ -53,7 +52,6 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let args = Args::parse();
-    let mirrors_url = args.resolved_mirrors_url();
     let default_filter = if args.debug {
         "relay_cache=debug"
     } else {
@@ -68,20 +66,20 @@ async fn main() -> Result<()> {
     tracing::info!(
         target: "relay_cache",
         bind = %args.bind,
-        mirror_host = %args.mirror_host,
-        mirrors_url = %mirrors_url,
+        unit_dir = %args.unit_dir.display(),
+        schema_host = %args.schema_host,
         schema_db = %args.schema_db,
         mem_ceiling_bytes = args.mem_ceiling_bytes,
         debug_mode = args.debug,
         "starting"
     );
 
-    let regions = discover_regions(&mirrors_url).await?;
+    let regions = discover_regions(&args.unit_dir)?;
     if regions.is_empty() {
         tracing::warn!(
             target: "relay_cache",
-            mirrors_url = %mirrors_url,
-            "no regional mirrors discovered; HTTP will serve empty fan-outs"
+            unit_dir = %args.unit_dir.display(),
+            "no regional relays discovered; HTTP will serve empty fan-outs"
         );
     } else {
         tracing::info!(
@@ -91,33 +89,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Schema lives on the mirror; wait until the schema DB is live so the
-    // one-shot fetch doesn't race bootstrap.
-    {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(4))
-            .build()
-            .context("build schema-wait HTTP client")?;
-        let mut shutdown = shutdown_signal_clone();
-        tracing::info!(
-            target: "relay_cache",
-            schema_db = %args.schema_db,
-            "waiting for schema DB to be live on public-mirror"
-        );
-        let ready = crate::discovery::wait_for_mirror_ready(
-            &mirrors_url,
-            &args.schema_db,
-            &http,
-            &mut shutdown,
-        )
-        .await?;
-        if !ready {
-            tracing::info!(target: "relay_cache", "shutdown during schema wait");
-            return Ok(());
-        }
-    }
-
-    let schema = Arc::new(fetch_schema(&args.mirror_host, &args.schema_db).await?);
+    let schema = Arc::new(fetch_schema(&args.schema_host, &args.schema_db).await?);
     tracing::info!(
         target: "relay_cache",
         tables = schema.tables.len(),
@@ -125,16 +97,16 @@ async fn main() -> Result<()> {
     );
 
     let interest = InterestHub::new();
-    let bind_url = Url::parse(&format!("ws://{}", args.mirror_host.trim()))
-        .context("build mirror bind URL")?;
 
     let mut shards = Vec::with_capacity(regions.len());
     for r in &regions {
+        let bind_url = Url::parse(&format!("ws://127.0.0.1:{}", r.frontend_port))
+            .context("build region bind URL")?;
         let handle = spawn_shard(
             r.region,
             r.database.clone(),
-            bind_url.clone(),
-            mirrors_url.clone(),
+            bind_url,
+            r.dashboard_port,
             schema.clone(),
             interest.clone(),
             args.debug,

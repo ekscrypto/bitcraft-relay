@@ -1,0 +1,33 @@
+# Host-managed site: /etc/nginx/sites-available/relay-frontends
+#
+# One `listen` per public port in 3000–3025 (IPv4 + IPv6) with the
+# existing Let's Encrypt cert for relay.bitcraftsync.app. Each public
+# port proxies to the matching loopback relay frontend on the same port
+# (relay binds 127.0.0.1:<port>, nginx binds <pubip>:<port>).
+#
+# Before (public-mirror monolithic fan-in — all ports → :3000):
+#   proxy_pass http://127.0.0.1:3000;
+# After (per-region relay fleet):
+#   proxy_pass http://127.0.0.1:$server_port;
+#
+# IMPORTANT: on this host `sites-enabled/relay-frontends` is a regular
+# file (not a symlink). After editing sites-available, copy or sync the
+# file into sites-enabled before `nginx -s reload`.
+
+# Inside the `server { listen …:30NN ssl; … }` block:
+location / {
+    proxy_pass http://127.0.0.1:$server_port;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+# Clients:
+#   wss://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/subscribe
+#   https://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/schema?version=9

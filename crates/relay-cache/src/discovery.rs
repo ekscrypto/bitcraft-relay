@@ -1,119 +1,60 @@
 // SPDX-License-Identifier: MIT
 
-//! Discover regional mirrors from public-mirror `GET /v1/mirrors`.
+//! One-shot discovery of regional relay frontends from systemd unit files.
 //!
-//! Skips `bitcraft-live-global` (cross-region reference data, out of
-//! scope for the regional gameplay tables the cache serves).
+//! Wraps `relay_coordinator::health::discover` so we get the same
+//! `--frontend-bind` / `--mirror-database` parsing the coordinator and
+//! `fleet-status.sh` already rely on. Filters out `global` (cross-region
+//! reference data, out of scope for the regional gameplay tables the
+//! cache serves).
 
-use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use std::path::Path;
 
-/// One regional mirror on the local public-mirror process.
+use anyhow::Result;
+
+/// One region frontend on the local host.
 #[derive(Debug, Clone)]
 pub struct DiscoveredRegion {
     pub region: u32,
     pub database: String,
+    pub frontend_port: u16,
+    /// Loopback dashboard port (`--dashboard-bind`) for `/metrics` polls.
+    pub dashboard_port: u16,
 }
 
-#[derive(Debug, Deserialize)]
-struct MirrorsResponse {
-    mirrors: Vec<MirrorRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MirrorRow {
-    database: String,
-    #[serde(default)]
-    connectivity: Option<String>,
-    #[serde(default)]
-    tables_live: Option<u32>,
-    #[serde(default)]
-    tables_total: Option<u32>,
-}
-
-/// Poll `mirrors_url` and return regional (`bitcraft-live-N`) databases.
-pub async fn discover_regions(mirrors_url: &str) -> Result<Vec<DiscoveredRegion>> {
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .context("build mirrors HTTP client")?;
-    let resp = http
-        .get(mirrors_url)
-        .send()
-        .await
-        .with_context(|| format!("GET {mirrors_url}"))?;
-    if !resp.status().is_success() {
-        bail!("GET {mirrors_url} returned {}", resp.status());
-    }
-    let body: MirrorsResponse = resp
-        .json()
-        .await
-        .with_context(|| format!("decode {mirrors_url}"))?;
-
-    let mut out = Vec::new();
-    for row in body.mirrors {
-        if row.database == "bitcraft-live-global" || row.database.ends_with("-global") {
+/// Walk `unit_dir` for `relay-bc<N>.service` units and return the
+/// regional mirrors. Skips `relay-global` and any source whose region
+/// number cannot be parsed (with a warn log).
+pub fn discover_regions(unit_dir: &Path) -> Result<Vec<DiscoveredRegion>> {
+    let sources = relay_coordinator::health::discover(
+        unit_dir,
+        // BitCraft's convention: `relay-bc14` → `bitcraft-live-14`.
+        &relay_coordinator::health::NamingSpec {
+            template: Some("bitcraft-live-{stem}".into()),
+            stem_prefix: Some("relay-bc".into()),
+        },
+    );
+    let mut out = Vec::with_capacity(sources.len());
+    for src in sources {
+        if src.name == "global" {
             continue;
         }
-        let Some(region) = parse_region_number(&row.database) else {
+        let Some(region) = parse_region_number(&src.name) else {
             tracing::warn!(
                 target: "relay_cache::discovery",
-                database = %row.database,
-                "skipping mirror: cannot parse region number"
+                name = %src.name,
+                "skipping source: cannot parse region number"
             );
             continue;
         };
         out.push(DiscoveredRegion {
             region,
-            database: row.database,
+            database: src.database,
+            frontend_port: src.frontend_port,
+            dashboard_port: src.dashboard_port,
         });
     }
-    out.sort_by_key(|r| r.region);
     Ok(out)
-}
-
-/// True when this mirror row is ready for cache subscribe.
-pub fn mirror_row_ready(connectivity: Option<&str>, tables_live: Option<u32>, tables_total: Option<u32>) -> bool {
-    connectivity == Some("live")
-        && tables_live.is_some()
-        && tables_live == tables_total
-}
-
-/// Poll until the named database is `live` with full table sync.
-///
-/// Returns `Ok(true)` when ready, `Ok(false)` on shutdown.
-pub async fn wait_for_mirror_ready(
-    mirrors_url: &str,
-    database: &str,
-    http: &reqwest::Client,
-    shutdown: &mut std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
-) -> Result<bool> {
-    let mut backoff = std::time::Duration::from_secs(2);
-    let max_backoff = std::time::Duration::from_secs(30);
-    loop {
-        match http.get(mirrors_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(body) = resp.json::<MirrorsResponse>().await {
-                    if let Some(row) = body.mirrors.iter().find(|m| m.database == database) {
-                        if mirror_row_ready(
-                            row.connectivity.as_deref(),
-                            row.tables_live,
-                            row.tables_total,
-                        ) {
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        tokio::select! {
-            biased;
-            _ = &mut *shutdown => return Ok(false),
-            _ = tokio::time::sleep(backoff) => {}
-        }
-        backoff = (backoff * 2).min(max_backoff);
-    }
 }
 
 /// `"bitcraft-live-14"` → `Some(14)`.
@@ -126,19 +67,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_region_from_database_name() {
+    fn parse_region_from_source_name() {
         assert_eq!(parse_region_number("bitcraft-live-14"), Some(14));
         assert_eq!(parse_region_number("bitcraft-live-3"), Some(3));
-        assert_eq!(parse_region_number("bitcraft-live-global"), None);
+        assert_eq!(parse_region_number("global"), None);
         assert_eq!(parse_region_number("bitcraft-live-"), None);
-        assert_eq!(parse_region_number("relay-mirror-bc14"), None);
+        assert_eq!(parse_region_number("relay-bc14"), None);
     }
 
     #[test]
-    fn ready_requires_live_and_full_tables() {
-        assert!(mirror_row_ready(Some("live"), Some(12), Some(12)));
-        assert!(!mirror_row_ready(Some("live"), Some(11), Some(12)));
-        assert!(!mirror_row_ready(Some("subscribing"), Some(12), Some(12)));
-        assert!(!mirror_row_ready(Some("disconnected"), Some(0), Some(12)));
+    fn discover_forwards_dashboard_port() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("relay-bc14.service"),
+            "[Service]\n\
+             ExecStart=/relay \\\n\
+             --mirror-database relay-mirror-bc14 \\\n\
+             --frontend-bind 127.0.0.1:3014 \\\n\
+             --dashboard-bind 127.0.0.1:3114\n",
+        )
+        .unwrap();
+        let regions = discover_regions(dir.path()).unwrap();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].region, 14);
+        assert_eq!(regions[0].frontend_port, 3014);
+        assert_eq!(regions[0].dashboard_port, 3114);
+        assert_eq!(regions[0].database, "relay-mirror-bc14");
     }
 }

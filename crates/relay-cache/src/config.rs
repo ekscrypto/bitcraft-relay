@@ -5,13 +5,15 @@
 //! `RELAY_CACHE_*` env var, sensible production defaults so an operator
 //! can run with no flags on the relay host.
 
+use std::path::PathBuf;
+
 use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "relay-cache",
     version,
-    about = "Same-host in-memory read cache over public-mirror"
+    about = "Same-host in-memory read cache over the relay fleet"
 )]
 pub struct Args {
     /// Loopback bind for the HTTP read API. Empty string disables the
@@ -20,26 +22,33 @@ pub struct Args {
     #[arg(long, env = "RELAY_CACHE_BIND", default_value = "127.0.0.1:8089")]
     pub bind: String,
 
-    /// Public-mirror HTTP+WS host (`host:port`). Used for schema fetch,
-    /// `/v1/mirrors` discovery/ready-gate, and per-region WS subscribe.
+    /// Systemd unit directory, walked once at startup to discover the
+    /// `relay-bc<N>` fleet. Defaults to the system path; the relay tests
+    /// override this to a tmpdir.
     #[arg(
         long,
-        env = "RELAY_CACHE_MIRROR_HOST",
-        default_value = "127.0.0.1:3000"
+        env = "RELAY_CACHE_UNIT_DIR",
+        default_value = "/etc/systemd/system"
     )]
-    pub mirror_host: String,
+    pub unit_dir: PathBuf,
 
-    /// Full URL for `GET /v1/mirrors`. Defaults to
-    /// `http://{mirror_host}/v1/mirrors` when empty.
-    #[arg(long, env = "RELAY_CACHE_MIRRORS_URL", default_value = "")]
-    pub mirrors_url: String,
+    /// `host:port` of any one region frontend, used to fetch the shared
+    /// module schema once at startup. All regions serve byte-identical
+    /// schemas; the choice is arbitrary. Must be a frontend port
+    /// (`3000+region`), not the public `:443` health site.
+    #[arg(
+        long,
+        env = "RELAY_CACHE_SCHEMA_HOST",
+        default_value = "127.0.0.1:3014"
+    )]
+    pub schema_host: String,
 
-    /// Database name used for the one-shot schema fetch. Any live
-    /// regional DB works (schemas are shared).
+    /// Database name on the schema host. Defaults to the production
+    /// mirror; override for staging.
     #[arg(
         long,
         env = "RELAY_CACHE_SCHEMA_DB",
-        default_value = "bitcraft-live-14"
+        default_value = "relay-mirror-bc14"
     )]
     pub schema_db: String,
 
@@ -59,15 +68,4 @@ pub struct Args {
     /// a region hangs mid bulk-load and info-only bookends aren't enough.
     #[arg(long, env = "RELAY_CACHE_DEBUG", default_value_t = false)]
     pub debug: bool,
-}
-
-impl Args {
-    pub fn resolved_mirrors_url(&self) -> String {
-        let t = self.mirrors_url.trim();
-        if t.is_empty() {
-            format!("http://{}/v1/mirrors", self.mirror_host.trim())
-        } else {
-            t.to_string()
-        }
-    }
 }
