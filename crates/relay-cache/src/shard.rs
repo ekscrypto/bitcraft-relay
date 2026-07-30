@@ -25,6 +25,7 @@ use crate::decode::{
     PLAYER_STATE_TABLE, PLAYER_USERNAME_TABLE, PROGRESSIVE_ACTION_TABLE, RENT_TABLE,
     RESOURCE_GROWTH_TIMER_TABLE, RESOURCE_TABLE, SKILL_DESC_TABLE, STORAGE_LOG_TABLE,
 };
+use crate::discovery::RegionBackend;
 use crate::interest::{InterestHub, TouchBatch};
 use crate::store::RegionStore;
 use crate::wire;
@@ -139,7 +140,9 @@ pub fn spawn_shard(
     region: u32,
     database: String,
     bind_url: Url,
-    dashboard_port: u16,
+    dashboard_port: Option<u16>,
+    backend: RegionBackend,
+    mirrors_url: Option<String>,
     schema: Arc<MirroredSchema>,
     interest: Arc<InterestHub>,
     debug_mode: bool,
@@ -156,6 +159,8 @@ pub fn spawn_shard(
             database,
             bind_url,
             dashboard_port,
+            backend,
+            mirrors_url,
             schema,
             store,
             interest,
@@ -180,7 +185,9 @@ async fn run_shard_loop(
     region: u32,
     database: String,
     bind_url: Url,
-    dashboard_port: u16,
+    dashboard_port: Option<u16>,
+    backend: RegionBackend,
+    mirrors_url: Option<String>,
     schema: Arc<MirroredSchema>,
     store: Arc<RwLock<RegionStore>>,
     interest: Arc<InterestHub>,
@@ -195,7 +202,21 @@ async fn run_shard_loop(
         .context("build metrics HTTP client")?;
 
     loop {
-        match wait_for_relay_ready(region, dashboard_port, &http, shutdown).await? {
+        let ready = match backend {
+            RegionBackend::RelayFleet => {
+                let Some(dashboard_port) = dashboard_port else {
+                    bail!("relay-fleet region {region} missing dashboard_port");
+                };
+                wait_for_relay_ready(region, dashboard_port, &http, shutdown).await?
+            }
+            RegionBackend::PublicMirror => {
+                let Some(ref url) = mirrors_url else {
+                    bail!("public-mirror region {region} missing mirrors_url");
+                };
+                wait_for_mirror_ready(region, &database, url, &http, shutdown).await?
+            }
+        };
+        match ready {
             ReadyGate::Shutdown => {
                 tracing::info!(target: "relay_cache::shard", region, "shard shutting down");
                 clear_store(&store, region);
@@ -363,6 +384,94 @@ fn metrics_indicate_ready(body: &serde_json::Value) -> bool {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     link_up("upstream") && link_up("local_stdb") && complete
+}
+
+/// Poll `/v1/mirrors` until the named database is live with all tables.
+async fn wait_for_mirror_ready(
+    region: u32,
+    database: &str,
+    mirrors_url: &str,
+    http: &reqwest::Client,
+    shutdown: &mut std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) -> Result<ReadyGate> {
+    let mut backoff = READY_GATE_BACKOFF_MIN;
+    loop {
+        match http.get(mirrors_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(body) if mirror_row_indicates_ready(&body, database) => {
+                        tracing::info!(
+                            target: "relay_cache::shard",
+                            region,
+                            database,
+                            %mirrors_url,
+                            "public-mirror ready (connectivity live, all tables)"
+                        );
+                        return Ok(ReadyGate::Ready);
+                    }
+                    Ok(_) => {
+                        tracing::debug!(
+                            target: "relay_cache::shard",
+                            region,
+                            database,
+                            "mirror row not ready yet; waiting"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            target: "relay_cache::shard",
+                            region,
+                            error = %e,
+                            "/v1/mirrors JSON decode failed; waiting"
+                        );
+                    }
+                }
+            }
+            Ok(resp) => {
+                tracing::debug!(
+                    target: "relay_cache::shard",
+                    region,
+                    status = %resp.status(),
+                    "/v1/mirrors HTTP non-success; waiting"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    target: "relay_cache::shard",
+                    region,
+                    error = %e,
+                    "/v1/mirrors poll failed; waiting"
+                );
+            }
+        }
+
+        tokio::select! {
+            biased;
+            _ = &mut *shutdown => {
+                return Ok(ReadyGate::Shutdown);
+            }
+            _ = tokio::time::sleep(backoff) => {}
+        }
+        backoff = (backoff * 2).min(READY_GATE_BACKOFF_MAX);
+    }
+}
+
+fn mirror_row_indicates_ready(body: &serde_json::Value, database: &str) -> bool {
+    let Some(arr) = body.get("mirrors").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    for m in arr {
+        if m.get("database").and_then(|v| v.as_str()) != Some(database) {
+            continue;
+        }
+        let connectivity = m.get("connectivity").and_then(|v| v.as_str());
+        let tables_live = m.get("tables_live").and_then(|v| v.as_u64()).map(|n| n as u32);
+        let tables_total = m.get("tables_total").and_then(|v| v.as_u64()).map(|n| n as u32);
+        return connectivity == Some("live")
+            && tables_live.is_some()
+            && tables_live == tables_total;
+    }
+    false
 }
 
 #[allow(clippy::too_many_arguments)]

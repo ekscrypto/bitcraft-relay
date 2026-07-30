@@ -38,7 +38,6 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use relay_protocol::{parse_schema, MirroredSchema};
 use tracing_subscriber::EnvFilter;
-use url::Url;
 
 use crate::config::Args;
 use crate::discovery::discover_regions;
@@ -67,6 +66,8 @@ async fn main() -> Result<()> {
         target: "relay_cache",
         bind = %args.bind,
         unit_dir = %args.unit_dir.display(),
+        mirrors_url = %args.mirrors_url,
+        mirror_ws_host = %args.mirror_ws_host,
         schema_host = %args.schema_host,
         schema_db = %args.schema_db,
         mem_ceiling_bytes = args.mem_ceiling_bytes,
@@ -74,7 +75,24 @@ async fn main() -> Result<()> {
         "starting"
     );
 
-    let regions = discover_regions(&args.unit_dir)?;
+    let mirrors_url = {
+        let t = args.mirrors_url.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    };
+    let mirror_ws_host = {
+        let t = args.mirror_ws_host.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    };
+
+    let regions = discover_regions(&args.unit_dir, mirrors_url, mirror_ws_host).await?;
     if regions.is_empty() {
         tracing::warn!(
             target: "relay_cache",
@@ -100,13 +118,13 @@ async fn main() -> Result<()> {
 
     let mut shards = Vec::with_capacity(regions.len());
     for r in &regions {
-        let bind_url = Url::parse(&format!("ws://127.0.0.1:{}", r.frontend_port))
-            .context("build region bind URL")?;
         let handle = spawn_shard(
             r.region,
             r.database.clone(),
-            bind_url,
+            r.bind_url.clone(),
             r.dashboard_port,
+            r.backend,
+            r.mirrors_url.clone(),
             schema.clone(),
             interest.clone(),
             args.debug,

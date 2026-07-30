@@ -24,13 +24,27 @@ pub struct Args {
 
     /// Systemd unit directory, walked once at startup to discover the
     /// `relay-bc<N>` fleet. Defaults to the system path; the relay tests
-    /// override this to a tmpdir.
+    /// override this to a tmpdir. Regions also listed in `--mirrors-url`
+    /// are skipped (public-mirror wins).
     #[arg(
         long,
         env = "RELAY_CACHE_UNIT_DIR",
         default_value = "/etc/systemd/system"
     )]
     pub unit_dir: PathBuf,
+
+    /// Public-mirror readiness URL (`GET /v1/mirrors`). When set, each
+    /// regional `bitcraft-live-N` row is subscribed via public-mirror
+    /// instead of the matching `relay-bcN` unit. Unset = relay-fleet only.
+    #[arg(long, env = "RELAY_CACHE_MIRRORS_URL", default_value = "")]
+    pub mirrors_url: String,
+
+    /// Loopback WS host for all mirror-discovered regions (`host:port`).
+    /// Use for monolithic public-mirror (`127.0.0.1:3000`) or the trial
+    /// instance (`127.0.0.1:3030`). When empty, each region uses
+    /// `127.0.0.1:3000+N` (per-instance layout).
+    #[arg(long, env = "RELAY_CACHE_MIRROR_WS_HOST", default_value = "")]
+    pub mirror_ws_host: String,
 
     /// `host:port` of any one region frontend, used to fetch the shared
     /// module schema once at startup. All regions serve byte-identical

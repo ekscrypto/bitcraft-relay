@@ -26,6 +26,16 @@ ExecStart=/srv/relay/bitcraft-relay/target/release/relay-cache \
 # RELAY_CACHE_DEBUG=1). Heartbeats every 5s while waiting on bulk load.
 WorkingDirectory=/srv/relay/bitcraft-relay
 Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+# Partial public-mirror cutover (e.g. regions 7/8 on trial :3030):
+#   RELAY_CACHE_MIRRORS_URL=http://127.0.0.1:3031/v1/mirrors
+#   RELAY_CACHE_MIRROR_WS_HOST=127.0.0.1:3030
+# Production monolithic mirror:
+#   RELAY_CACHE_MIRRORS_URL=http://127.0.0.1:3001/v1/mirrors
+#   RELAY_CACHE_MIRROR_WS_HOST=127.0.0.1:3000
+#   RELAY_CACHE_SCHEMA_HOST=127.0.0.1:3000
+#   RELAY_CACHE_SCHEMA_DB=bitcraft-live-7
+Environment="RELAY_CACHE_MIRRORS_URL="
+Environment="RELAY_CACHE_MIRROR_WS_HOST="
 Environment="RUST_LOG=relay_cache=info"
 Restart=on-failure
 RestartSec=5s
