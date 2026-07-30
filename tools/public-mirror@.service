@@ -1,0 +1,30 @@
+# One public-mirror process per upstream database (systemd template).
+#
+# Started by relay-coordinator's fleet sequencer — one instance at a time,
+# waiting for full sync before the next. Do not enable individual instances
+# or `systemctl start public-mirror.target` (parallel cold start).
+#
+# `%i` is the upstream database name (bitcraft-live-global, bitcraft-live-14, …).
+# public-mirror-start.sh derives listen port 3000+regionID and data dir.
+[Unit]
+Description=spacetimedb-public-mirror (%i)
+After=network-online.target relay-coordinator.service
+Wants=network-online.target
+PartOf=public-mirror.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+EnvironmentFile=-/etc/relay/upstream.env
+ExecStart=/srv/relay/bitcraft-relay/tools/public-mirror-start.sh %i
+WorkingDirectory=/srv/relay/spacetimedb-public-mirror
+Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RUST_LOG=spacetimedb=info,public_mirror=info"
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=0
+TimeoutStopSec=30s
+MemoryHigh=2G
+
+# Not WantedBy= — coordinator starts instances explicitly.

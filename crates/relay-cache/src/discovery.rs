@@ -108,6 +108,32 @@ fn discover_from_units(unit_dir: &Path) -> Result<Vec<DiscoveredRegion>> {
 }
 
 async fn discover_from_mirrors(mirrors_url: &str, mirror_ws_host: Option<&str>) -> Result<Vec<DiscoveredRegion>> {
+    let urls: Vec<&str> = mirrors_url
+        .split(',')
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .collect();
+    if urls.is_empty() {
+        anyhow::bail!("mirrors_url is empty");
+    }
+
+    let mut out = Vec::new();
+    for url in urls {
+        out.extend(
+            discover_from_mirrors_one(url, mirror_ws_host)
+                .await
+                .with_context(|| format!("discover from {url}"))?,
+        );
+    }
+    out.sort_by_key(|r| r.region);
+    out.dedup_by_key(|r| r.region);
+    Ok(out)
+}
+
+async fn discover_from_mirrors_one(
+    mirrors_url: &str,
+    mirror_ws_host: Option<&str>,
+) -> Result<Vec<DiscoveredRegion>> {
     let http = Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()

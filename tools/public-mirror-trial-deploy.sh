@@ -93,9 +93,12 @@ echo "production public-mirror, relay-cache, relay-coordinator: NOT touched"
 echo
 
 if [ "$DO_STOP" -eq 1 ]; then
-    echo "== trial: stop ${UNIT} + ${GUARD_UNIT} =="
+    echo "== trial: stop + disable ${UNIT} + ${GUARD_UNIT} =="
     run_remote "sudo systemctl stop ${GUARD_UNIT} ${UNIT} 2>/dev/null || true"
     run_remote "sudo systemctl disable ${GUARD_UNIT} ${UNIT} 2>/dev/null || true"
+    echo "== trial: remove installed systemd units (no autostart on boot) =="
+    run_remote "sudo rm -f /etc/systemd/system/${UNIT} /etc/systemd/system/${GUARD_UNIT} && sudo systemctl daemon-reload"
+    echo "== trial: stopped; production public-mirror, relay-cache, relay-coordinator untouched =="
     exit 0
 fi
 

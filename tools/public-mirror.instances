@@ -1,0 +1,19 @@
+# One upstream database per public-mirror systemd instance.
+# Used by public-mirror@.service (%i), fleet-status.sh, relay-coordinator,
+# and relay-cache to discover the live regional fleet.
+#
+# Port formula: bitcraft-live-global → 3000; bitcraft-live-N → 3000+N.
+bitcraft-live-global
+bitcraft-live-3
+bitcraft-live-7
+bitcraft-live-8
+bitcraft-live-9
+bitcraft-live-11
+bitcraft-live-12
+bitcraft-live-13
+bitcraft-live-14
+bitcraft-live-15
+bitcraft-live-17
+bitcraft-live-18
+bitcraft-live-19
+bitcraft-live-23
