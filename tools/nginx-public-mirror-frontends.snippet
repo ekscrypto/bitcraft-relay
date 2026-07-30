@@ -26,4 +26,5 @@ location / {
 # Clients:
 #   wss://relay.bitcraftsync.app:<any-3000-3025>/v1/database/bitcraft-live-N/subscribe
 #   https://relay.bitcraftsync.app:<port>/v1/database/bitcraft-live-N/schema?version=9
-#   http://127.0.0.1:3000/v1/mirrors   (loopback readiness; not required publicly)
+#   http://127.0.0.1:3001/v1/mirrors   (isolated sidecar; responsive during seed)
+#   http://127.0.0.1:3000/v1/mirrors   (main server; may hang while seeding)

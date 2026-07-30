@@ -24,7 +24,8 @@ special case at offset 0.
 | Role | Address |
 |------|---------|
 | Mirror HTTP + WS (loopback) | `127.0.0.1:3000` |
-| Per-mirror readiness JSON | `GET http://127.0.0.1:3000/v1/mirrors` |
+| Mirror readiness JSON (isolated sidecar) | `GET http://127.0.0.1:3001/v1/mirrors` |
+| Per-mirror readiness JSON (legacy, main server) | `GET http://127.0.0.1:3000/v1/mirrors` |
 | Fleet `/health` (coordinator) | `127.0.0.1:8082` → public `/health` |
 | `relay-cache` HTTP/WS | `127.0.0.1:8089` |
 
@@ -37,7 +38,7 @@ There is no per-region dashboard band (`3100+N`) and no per-region
 |------|-------|-----|
 | Global + regional (public WSS/HTTP) | `3000–3025` | nginx TLS → `127.0.0.1:3000` |
 | Reserved (future public) | `3026–3049` | Widen nginx/UFW when needed |
-| **Trial** (regions 7–9 only) | `3030` loopback, public `3037–3039` | Isolated `public-mirror-trial.service`; see [`tools/public-mirror-trial-deploy.sh`](tools/public-mirror-trial-deploy.sh) |
+| **Trial** (regions 7–8 only) | `3030` loopback, status `3031`, public `3037–3038` | Isolated `public-mirror-trial.service`; see [`tools/public-mirror-trial-deploy.sh`](tools/public-mirror-trial-deploy.sh) |
 | ~~Dashboard~~ | ~~`3100–3149`~~ | Retired with the old relay fleet |
 
 ## Public URLs

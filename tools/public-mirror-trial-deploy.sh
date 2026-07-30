@@ -40,13 +40,13 @@ SSH_TARGET="${RELAY_SSH_USER}@${RELAY_HOST}"
 UNIT=public-mirror-trial.service
 GUARD_UNIT=public-mirror-trial-ram-guard.service
 TRIAL_LOOPBACK="127.0.0.1:3030"
-MIRRORS_URL="http://${TRIAL_LOOPBACK}/v1/mirrors"
+MIRRORS_URL="http://127.0.0.1:3031/v1/mirrors"
 
 APPLY=0
 DO_BUILD=0
 DO_STOP=0
 NO_WAIT=0
-MIN_FREE_KB=2097152  # 2 GiB — matches RAM guard
+MIN_FREE_KB=1048576  # 1 GiB — matches RAM guard
 
 usage() {
     sed -n '2,16p' "$0"
@@ -125,7 +125,7 @@ run_remote "sudo mkdir -p /var/lib/relay/public-mirror-trial && sudo chown ${REL
 run_remote "sudo systemctl daemon-reload"
 run_remote "sudo systemctl enable ${UNIT} ${GUARD_UNIT}"
 run_remote "sudo systemctl restart ${UNIT} ${GUARD_UNIT}"
-echo "== trial: RAM guard active (stops ${UNIT} if MemAvailable < 2 GiB) =="
+echo "== trial: RAM guard active (stops ${UNIT} if MemAvailable < 1 GiB) =="
 
 if [ "$APPLY" -eq 1 ]; then
     avail=$(ssh "$SSH_TARGET" "awk '/^MemAvailable:/ {print \$2; exit}' /proc/meminfo" 2>/dev/null || echo 0)
@@ -160,7 +160,7 @@ except json.JSONDecodeError:
     print("waiting: /v1/mirrors returned non-JSON")
     raise SystemExit(1)
 mirrors = d.get("mirrors") or []
-want = {"bitcraft-live-7", "bitcraft-live-8", "bitcraft-live-9"}
+want = {"bitcraft-live-7", "bitcraft-live-8"}
 live = {m.get("database") for m in mirrors if m.get("connectivity") == "live"}
 if want <= live:
     print("all trial mirrors live:", ", ".join(sorted(want)))

@@ -1,7 +1,7 @@
 #!/bin/sh
 # public-mirror-trial-status.sh — one-line status for the trial mirror fleet.
 #
-# Polls GET http://127.0.0.1:3030/v1/mirrors (regions 7, 8, 9 only).
+# Polls GET http://127.0.0.1:3030/v1/mirrors (regions 7 and 8 only).
 # Does not touch production /v1/mirrors on :3000.
 #
 # Usage:
@@ -10,7 +10,7 @@
 
 set -eu
 
-MIRRORS_URL="${TRIAL_MIRRORS_URL:-http://127.0.0.1:3030/v1/mirrors}"
+MIRRORS_URL="${TRIAL_MIRRORS_URL:-http://127.0.0.1:3031/v1/mirrors}"
 INTERVAL="${TRIAL_INTERVAL:-5}"
 
 print_once() {
@@ -34,7 +34,7 @@ for m in sorted(mirrors, key=lambda x: x.get("database") or ""):
     if m.get("last_disconnect_reason"):
         notes.append(str(m["last_disconnect_reason"])[:60])
     print(f"{db:<22} {conn:<12} {tables:<12} {', '.join(notes)}")
-want = {"bitcraft-live-7", "bitcraft-live-8", "bitcraft-live-9"}
+want = {"bitcraft-live-7", "bitcraft-live-8"}
 have = {m.get("database") for m in mirrors}
 missing = want - have
 if missing:

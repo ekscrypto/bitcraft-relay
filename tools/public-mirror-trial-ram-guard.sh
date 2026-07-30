@@ -3,7 +3,7 @@
 #
 # Uses MemAvailable from /proc/meminfo (same signal the kernel OOM logic uses).
 # Polls every TRIAL_RAM_GUARD_INTERVAL seconds (default 2). When MemAvailable
-# drops below TRIAL_RAM_MIN_FREE_KB (default 2 GiB), stops public-mirror-trial.service
+# drops below TRIAL_RAM_MIN_FREE_KB (default 1 GiB), stops public-mirror-trial.service
 # immediately and keeps watching so a manual restart cannot run while RAM stays low.
 #
 # Intended to run under public-mirror-trial-ram-guard.service.
@@ -11,7 +11,7 @@
 set -eu
 
 UNIT="${TRIAL_RAM_GUARD_UNIT:-public-mirror-trial.service}"
-MIN_FREE_KB="${TRIAL_RAM_MIN_FREE_KB:-2097152}"  # 2 GiB
+MIN_FREE_KB="${TRIAL_RAM_MIN_FREE_KB:-1048576}"  # 1 GiB
 INTERVAL="${TRIAL_RAM_GUARD_INTERVAL:-2}"
 TAG=public-mirror-trial-ram-guard
 
