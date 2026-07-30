@@ -101,7 +101,8 @@ for r in $(echo "$REGIONS" | tr ',' ' '); do
         's|proxy_pass http://127.0.0.1:${port};|proxy_pass http://${MIRROR_UPSTREAM};|' \
         /etc/nginx/sites-available/relay-frontends 2>/dev/null || true"
 done
-run_remote "sudo nginx -t && sudo nginx -s reload"
+run_remote "sudo cp /etc/nginx/sites-available/relay-frontends /etc/nginx/sites-enabled/relay-frontends && \
+    sudo nginx -t && sudo nginx -s reload"
 
 echo "== 3/4: stop relay-bc units for cutover regions =="
 for r in $(echo "$REGIONS" | tr ',' ' '); do
@@ -130,3 +131,7 @@ echo "Done. Verify:"
 echo "  curl -s http://127.0.0.1:8082/health | python3 -m json.tool"
 echo "  curl -s http://127.0.0.1:8089/cache-health | python3 -m json.tool"
 echo "  ./tools/public-mirror-trial-status.sh   # if using trial sidecar"
+echo
+echo "Rollback:"
+echo "  ./tools/rollback-regions-from-public-mirror.sh --apply --regions ${REGIONS} \\"
+echo "      --mirror-upstream ${MIRROR_UPSTREAM}"

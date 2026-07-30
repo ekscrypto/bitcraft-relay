@@ -100,6 +100,19 @@ cargo test  -p relay-cache
 cargo run   -p relay-cache --release
 ```
 
+## Partial region cutover scripts
+
+To move **some** regions from `relay-bc*` to public-mirror (and back) without
+touching the rest of the fleet, use the paired ops scripts in `tools/`:
+
+| Script | Purpose |
+|--------|---------|
+| `cutover-regions-to-public-mirror.sh` | Stop `relay-bcN`, repoint nginx, hybrid cache/coordinator drop-ins |
+| `rollback-regions-from-public-mirror.sh` | Reverse the above for the same `--regions` list |
+
+Full runbook (trial soak, env vars, gotchas, full-host rollback):
+[`../DEPLOY.md` — Partial region cutover](../DEPLOY.md#partial-region-cutover-relay--public-mirror).
+
 ## Conventions
 
 - Comments only when the WHY is non-obvious.
