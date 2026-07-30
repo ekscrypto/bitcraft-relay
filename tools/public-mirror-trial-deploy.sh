@@ -40,7 +40,7 @@ SSH_TARGET="${RELAY_SSH_USER}@${RELAY_HOST}"
 UNIT=public-mirror-trial.service
 GUARD_UNIT=public-mirror-trial-ram-guard.service
 TRIAL_LOOPBACK="127.0.0.1:3030"
-MIRRORS_URL="http://127.0.0.1:3031/v1/mirrors"
+MIRRORS_URL="http://127.0.0.1:3060/v1/mirrors"
 
 APPLY=0
 DO_BUILD=0

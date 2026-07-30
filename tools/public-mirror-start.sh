@@ -5,8 +5,9 @@
 #   public-mirror-start.sh bitcraft-live-14
 #
 # Derives loopback listen port (3000 + regionID), per-database data dir,
-# and a single --mirror upstream URL. Requires RELAY_UPSTREAM_TOKEN (or
-# equivalent) via EnvironmentFile on the unit.
+# and a single --mirror upstream URL. Sidecar GET /v1/mirrors binds at
+# main port + 30 (e.g. region 7 → :3007 main, :3037 status). Requires
+# RELAY_UPSTREAM_TOKEN (or equivalent) via EnvironmentFile on the unit.
 
 set -eu
 

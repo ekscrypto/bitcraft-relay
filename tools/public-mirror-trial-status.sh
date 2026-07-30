@@ -1,7 +1,7 @@
 #!/bin/sh
 # public-mirror-trial-status.sh — one-line status for the trial mirror fleet.
 #
-# Polls GET http://127.0.0.1:3031/v1/mirrors (regions 7 and 8 only).
+# Polls GET http://127.0.0.1:3060/v1/mirrors (regions 7 and 8 only).
 # Does not touch production /v1/mirrors on :3000.
 #
 # Usage:
@@ -10,7 +10,7 @@
 
 set -eu
 
-MIRRORS_URL="${TRIAL_MIRRORS_URL:-http://127.0.0.1:3031/v1/mirrors}"
+MIRRORS_URL="${TRIAL_MIRRORS_URL:-http://127.0.0.1:3060/v1/mirrors}"
 INTERVAL="${TRIAL_INTERVAL:-5}"
 
 print_once() {

@@ -14,7 +14,7 @@
 # Shared-upstream fan-in (monolithic mirror or trial sidecar — repoints nginx):
 #   ./tools/cutover-regions-to-public-mirror.sh --apply --regions 7,8 \
 #       --shared-upstream 127.0.0.1:3030 \
-#       --mirrors-url http://127.0.0.1:3031/v1/mirrors \
+#       --mirrors-url http://127.0.0.1:3060/v1/mirrors \
 #       --mirror-ws-host 127.0.0.1:3030
 #
 # Usage:
@@ -32,6 +32,8 @@ NATIVE_PORTS=1
 MIRRORS_URL=""
 MIRROR_WS_HOST=""
 MIRROR_UPSTREAM=""
+# Must match spacetimedb-public-mirror MIRROR_STATUS_PORT_OFFSET.
+MIRROR_STATUS_PORT_OFFSET=30
 SSH="${RELAY_SSH:-${RELAY_SSH_USER:-debian}@${RELAY_HOST:-relay.bitcraftsync.app}}"
 RELAY_BITCRAFT_DIR="${RELAY_BITCRAFT_DIR:-/srv/relay/bitcraft-relay}"
 WAIT_TIMEOUT="${CUTOVER_WAIT_TIMEOUT:-3600}"
@@ -63,7 +65,8 @@ if [ "$NATIVE_PORTS" -eq 1 ]; then
     MIRRORS_URL=""
     for r in $(echo "$REGIONS" | tr ',' ' '); do
         port=$((3000 + r))
-        url="http://127.0.0.1:${port}/v1/mirrors"
+        sidecar=$((port + MIRROR_STATUS_PORT_OFFSET))
+        url="http://127.0.0.1:${sidecar}/v1/mirrors"
         if [ -z "$MIRRORS_URL" ]; then
             MIRRORS_URL="$url"
         else
@@ -108,7 +111,8 @@ echo "== 3/5: wait for /v1/mirrors live (timeout ${WAIT_TIMEOUT}s) =="
 for r in $(echo "$REGIONS" | tr ',' ' '); do
     db="bitcraft-live-${r}"
     port=$((3000 + r))
-    url="http://127.0.0.1:${port}/v1/mirrors"
+    sidecar=$((port + MIRROR_STATUS_PORT_OFFSET))
+    url="http://127.0.0.1:${sidecar}/v1/mirrors"
     if [ "$APPLY" -eq 1 ]; then
         ssh "$SSH" "python3 - '${db}' '${url}' '${WAIT_TIMEOUT}'" <<'PY'
 import json, sys, time, urllib.request

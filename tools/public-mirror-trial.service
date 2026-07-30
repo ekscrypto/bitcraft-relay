@@ -3,7 +3,7 @@
 # Isolated from production `public-mirror.service` (all regions on :3000).
 # Does not affect relay-cache, relay-coordinator, or nginx ports 3000–3025.
 #
-# Loopback: 127.0.0.1:3030 (WS/HTTP), status 127.0.0.1:3031 (GET /v1/mirrors)
+# Loopback: 127.0.0.1:3030 (WS/HTTP), status 127.0.0.1:3060 (GET /v1/mirrors)
 # Optional public TLS (see nginx-public-mirror-trial-frontends.snippet): 3037–3038
 #
 # Install/start via tools/public-mirror-trial-deploy.sh (never `deploy.sh mirror`).
