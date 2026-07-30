@@ -1,0 +1,19 @@
+# RAM guard for public-mirror-trial.service.
+#
+# Stops the trial mirror when MemAvailable falls below 2 GiB so production
+# public-mirror, relay-cache, and relay-coordinator keep headroom.
+[Unit]
+Description=RAM guard for public-mirror trial (stop if MemAvailable < 2 GiB)
+After=network-online.target
+PartOf=public-mirror-trial.service
+
+[Service]
+Type=simple
+ExecStart=/srv/relay/bitcraft-relay/tools/public-mirror-trial-ram-guard.sh
+Environment="TRIAL_RAM_MIN_FREE_KB=2097152"
+Environment="TRIAL_RAM_GUARD_INTERVAL=2"
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
