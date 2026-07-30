@@ -1,0 +1,39 @@
+# Trial public-mirror instance — regions 7, 8, 9 only.
+#
+# Isolated from production `public-mirror.service` (all regions on :3000).
+# Does not affect relay-cache, relay-coordinator, or nginx ports 3000–3025.
+#
+# Loopback: 127.0.0.1:3030
+# Optional public TLS (see nginx-public-mirror-trial-frontends.snippet): 3037–3039
+#
+# Install/start via tools/public-mirror-trial-deploy.sh (never `deploy.sh mirror`).
+[Unit]
+Description=spacetimedb-public-mirror trial (regions 7, 8, 9)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+EnvironmentFile=-/etc/relay/upstream.env
+ExecStart=/srv/relay/spacetimedb-public-mirror/target/release/spacetimedb-standalone start \
+    --data-dir /var/lib/relay/public-mirror-trial \
+    --listen-addr 127.0.0.1:3030 \
+    --jwt-key-dir /srv/relay/.config/spacetime \
+    --public-mirror-v1 \
+    --non-interactive \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-7 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-8 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-9
+WorkingDirectory=/srv/relay/spacetimedb-public-mirror
+Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RUST_LOG=spacetimedb=info,public_mirror=info"
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=0
+TimeoutStopSec=30s
+MemoryHigh=8G
+
+[Install]
+WantedBy=multi-user.target

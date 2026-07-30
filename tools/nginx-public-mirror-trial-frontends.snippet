@@ -1,0 +1,35 @@
+# Optional public TLS frontends for the trial public-mirror (regions 7–9).
+#
+# Production ports 3000–3025 are untouched. Apply these blocks into the host's
+# relay-frontends site (or a separate include) and open UFW 3037:3039/tcp.
+#
+# Loopback backend: 127.0.0.1:3030 (public-mirror-trial.service)
+#
+# Trial public ports mirror the region-ID convention with a +30 offset:
+#   region 7 → :3037, region 8 → :3038, region 9 → :3039
+# All three proxy to the same backend; database name selects the shard.
+
+# server { listen …:3037 ssl; listen [::]:3037 ssl; … }
+# server { listen …:3038 ssl; listen [::]:3038 ssl; … }
+# server { listen …:3039 ssl; listen [::]:3039 ssl; … }
+#
+# Inside each server block:
+location / {
+    proxy_pass http://127.0.0.1:3030;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+# Clients (trial only):
+#   wss://relay.bitcraftsync.app:3037/v1/database/bitcraft-live-7/subscribe
+#   wss://relay.bitcraftsync.app:3038/v1/database/bitcraft-live-8/subscribe
+#   wss://relay.bitcraftsync.app:3039/v1/database/bitcraft-live-9/subscribe
+# Loopback readiness:
+#   curl -s http://127.0.0.1:3030/v1/mirrors
