@@ -5,9 +5,9 @@
 # tables in columnar memory, and serves the HTTP/protobuf read API
 # (plus the public dim-buildings WS) on 127.0.0.1:8089.
 #
-# Depends on the regional relay frontends being up (discovered from
-# /etc/systemd/system/relay-bc*.service). Schema is fetched once at
-# startup from a regional frontend on loopback.
+# Discovers regions from public-mirror /v1/mirrors (drop-in) and/or
+# legacy relay-bc* units. Schema is fetched once at startup from any
+# live regional frontend (see RELAY_CACHE_SCHEMA_*).
 [Unit]
 Description=spacetimedb-relay in-memory read cache
 After=network-online.target
@@ -17,33 +17,30 @@ Wants=network-online.target
 Type=simple
 User=relay
 Group=relay
+# Schema host/db come from Environment / cutover drop-in — do not hardcode
+# CLI --schema-* here (clap CLI flags override env and break cutover).
 ExecStart=/srv/relay/bitcraft-relay/target/release/relay-cache \
     --bind 127.0.0.1:8089 \
-    --unit-dir /etc/systemd/system \
-    --schema-host 127.0.0.1:3014 \
-    --schema-db relay-mirror-bc14
+    --unit-dir /etc/systemd/system
 # Diagnosing a hung SubscribeApplied: append --debug to ExecStart (or set
 # RELAY_CACHE_DEBUG=1). Heartbeats every 5s while waiting on bulk load.
 WorkingDirectory=/srv/relay/bitcraft-relay
 Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-# Partial public-mirror cutover (e.g. regions 7/8 on trial :3030):
-#   RELAY_CACHE_MIRRORS_URL=http://127.0.0.1:3060/v1/mirrors
-#   RELAY_CACHE_MIRROR_WS_HOST=127.0.0.1:3030
-# Production monolithic mirror:
-#   RELAY_CACHE_MIRRORS_URL=http://127.0.0.1:3030/v1/mirrors
-#   RELAY_CACHE_MIRROR_WS_HOST=127.0.0.1:3000
-#   RELAY_CACHE_SCHEMA_HOST=127.0.0.1:3000
-#   RELAY_CACHE_SCHEMA_DB=bitcraft-live-7
+# Full public-mirror fleet (native ports): cutover drop-in sets
+# RELAY_CACHE_MIRRORS_URL to the comma-separated sidecar list and
+# RELAY_CACHE_SCHEMA_* to a live bitcraft-live-N instance.
 Environment="RELAY_CACHE_MIRRORS_URL="
 Environment="RELAY_CACHE_MIRROR_WS_HOST="
+Environment="RELAY_CACHE_SCHEMA_HOST=127.0.0.1:3007"
+Environment="RELAY_CACHE_SCHEMA_DB=bitcraft-live-7"
 Environment="RUST_LOG=relay_cache=info"
 Restart=on-failure
 RestartSec=5s
 # Initial SubscribeApplied for inventory-heavy regions can take minutes.
 TimeoutStartSec=0
 TimeoutStopSec=30s
-# Soft ceiling matching the binary default (4 GiB); OS OOM is the hard stop.
-MemoryHigh=4G
+# Soft ceiling; full-fleet ingest is heavier than the old hybrid layout.
+MemoryHigh=8G
 
 [Install]
 WantedBy=multi-user.target

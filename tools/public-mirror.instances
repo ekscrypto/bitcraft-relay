@@ -1,5 +1,18 @@
-# Public-mirror systemd instances (partial cutover).
-# Regions listed here run as public-mirror@DATABASE on loopback :3000+N.
-# All other regions stay on the legacy relay-bc* fleet.
+# Public-mirror systemd instances (coordinator-sequenced).
+# One line per upstream database → public-mirror@DATABASE on loopback :3000+N.
+# relay-coordinator starts these one at a time (RELAY_FLEET_SEQUENCER=true).
+# cutover-regions-to-public-mirror.sh appends regions as they leave relay-bc*.
+bitcraft-live-global
 bitcraft-live-7
 bitcraft-live-8
+bitcraft-live-3
+bitcraft-live-9
+bitcraft-live-11
+bitcraft-live-15
+bitcraft-live-23
+bitcraft-live-13
+bitcraft-live-19
+bitcraft-live-14
+bitcraft-live-17
+bitcraft-live-18
+bitcraft-live-12

@@ -25,6 +25,6 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=0
 TimeoutStopSec=30s
-MemoryHigh=2G
+MemoryHigh=8G
 
 # Not WantedBy= — coordinator starts instances explicitly.

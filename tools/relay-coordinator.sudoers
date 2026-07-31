@@ -1,0 +1,4 @@
+# Passwordless systemctl for relay-coordinator fleet sequencer.
+# Install: sudo cp relay-coordinator.sudoers /etc/sudoers.d/relay-coordinator
+#          sudo visudo -cf /etc/sudoers.d/relay-coordinator
+relay ALL=(root) NOPASSWD: /usr/bin/systemctl start public-mirror@*.service, /usr/bin/systemctl stop public-mirror@*.service, /usr/bin/systemctl is-active public-mirror@*.service

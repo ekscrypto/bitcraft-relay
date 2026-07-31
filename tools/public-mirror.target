@@ -1,0 +1,15 @@
+# Fleet of per-region public-mirror instances.
+#
+# Instances are NOT started by this target — relay-coordinator's fleet
+# sequencer starts each `public-mirror@DATABASE.service` one at a time
+# (see relay-coordinator.service --fleet-sequencer).
+#
+# This target exists for grouping / PartOf= only. Do not `systemctl start
+# public-mirror.target` — it would start nothing useful.
+[Unit]
+Description=BitCraft public-mirror fleet (coordinator-sequenced)
+After=network-online.target relay-coordinator.service
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target

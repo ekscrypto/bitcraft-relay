@@ -1,15 +1,17 @@
 #!/bin/sh
 # cutover-regions-to-public-mirror.sh — partial WS + cache cutover for
-# named regions from relay-bc* to spacetimedb-public-mirror.
+# named regions from relay-bc* / relay-global to spacetimedb-public-mirror.
 #
 # Dry-run by default. With --apply:
-#   1. Stops relay-bcN for cutover regions (frees loopback :300N)
-#   2. Starts public-mirror@bitcraft-live-N (one process per region, native port)
-#   3. Waits for each region's GET /v1/mirrors row to go live
-#   4. Installs relay-cache + relay-coordinator hybrid drop-ins and restarts both
+#   1. Stops relay units for listed regions (frees loopback :300N)
+#   2. Appends databases to public-mirror.instances
+#   3. Starts public-mirror@DATABASE one at a time; waits for each to go live
+#   4. Rebuilds cache/coordinator drop-ins from the full instances file
+#   5. Restarts relay-cache + relay-coordinator (sequencer is idempotent)
 #
-# Production native ports (default — regions 7/8 on :3007/:3008):
+# Production native ports (default):
 #   ./tools/cutover-regions-to-public-mirror.sh --apply --regions 7,8
+#   ./tools/cutover-regions-to-public-mirror.sh --apply --regions global,3,9
 #
 # Shared-upstream fan-in (monolithic mirror or trial sidecar — repoints nginx):
 #   ./tools/cutover-regions-to-public-mirror.sh --apply --regions 7,8 \
@@ -36,6 +38,7 @@ MIRROR_UPSTREAM=""
 MIRROR_STATUS_PORT_OFFSET=30
 SSH="${RELAY_SSH:-${RELAY_SSH_USER:-debian}@${RELAY_HOST:-relay.bitcraftsync.app}}"
 RELAY_BITCRAFT_DIR="${RELAY_BITCRAFT_DIR:-/srv/relay/bitcraft-relay}"
+INSTANCES_FILE="${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances"
 WAIT_TIMEOUT="${CUTOVER_WAIT_TIMEOUT:-3600}"
 
 while [ $# -gt 0 ]; do
@@ -49,7 +52,7 @@ while [ $# -gt 0 ]; do
         --mirror-upstream) MIRROR_UPSTREAM="$2"; shift 2 ;;
         --wait-timeout) WAIT_TIMEOUT="$2"; shift 2 ;;
         -h|--help)
-            sed -n '2,23p' "$0"
+            sed -n '2,25p' "$0"
             exit 0
             ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -57,24 +60,35 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$REGIONS" ]; then
-    echo "error: --regions required (e.g. --regions 7,8)" >&2
+    echo "error: --regions required (e.g. --regions 7,8 or --regions global,3)" >&2
     exit 2
 fi
 
-if [ "$NATIVE_PORTS" -eq 1 ]; then
-    MIRRORS_URL=""
-    for r in $(echo "$REGIONS" | tr ',' ' '); do
-        port=$((3000 + r))
-        sidecar=$((port + MIRROR_STATUS_PORT_OFFSET))
-        url="http://127.0.0.1:${sidecar}/v1/mirrors"
-        if [ -z "$MIRRORS_URL" ]; then
-            MIRRORS_URL="$url"
-        else
-            MIRRORS_URL="${MIRRORS_URL},${url}"
-        fi
-    done
-    MIRROR_WS_HOST=""
-else
+# region token → database name
+db_for_region() {
+    case "$1" in
+        global) echo "bitcraft-live-global" ;;
+        *) echo "bitcraft-live-$1" ;;
+    esac
+}
+
+# region token → legacy relay unit
+relay_unit_for_region() {
+    case "$1" in
+        global) echo "relay-global.service" ;;
+        *) echo "relay-bc${1}.service" ;;
+    esac
+}
+
+# region token → public listen port
+port_for_region() {
+    case "$1" in
+        global) echo 3000 ;;
+        *) echo $((3000 + $1)) ;;
+    esac
+}
+
+if [ "$NATIVE_PORTS" -eq 0 ]; then
     if [ -z "$MIRRORS_URL" ] || [ -z "$MIRROR_WS_HOST" ] || [ -z "$MIRROR_UPSTREAM" ]; then
         echo "error: --shared-upstream mode requires --mirrors-url and --mirror-ws-host" >&2
         exit 2
@@ -91,28 +105,54 @@ run_remote() {
 
 echo "== cutover regions $REGIONS to public-mirror =="
 echo "   mode=$([ "$NATIVE_PORTS" -eq 1 ] && echo native-ports || echo shared-upstream)"
-echo "   mirrors_url=$MIRRORS_URL"
-echo "   mirror_ws_host=${MIRROR_WS_HOST:-<per-region native>}"
+echo "   instances_file=$INSTANCES_FILE"
 echo "   nginx upstream=${MIRROR_UPSTREAM:-unchanged (native ports)}"
 echo
 
-echo "== 1/5: stop relay-bc units (free loopback :300N) =="
+echo "== 1/6: stop relay units (free loopback :300N) =="
 for r in $(echo "$REGIONS" | tr ',' ' '); do
-    run_remote "sudo systemctl disable --now relay-bc${r}.service 2>/dev/null || true"
+    unit=$(relay_unit_for_region "$r")
+    run_remote "sudo systemctl disable --now ${unit} 2>/dev/null || true"
 done
 
-echo "== 2/5: start public-mirror@bitcraft-live-N =="
+echo "== 2/6: append databases to public-mirror.instances =="
 for r in $(echo "$REGIONS" | tr ',' ' '); do
-    db="bitcraft-live-${r}"
-    run_remote "sudo systemctl enable --now public-mirror@${db}.service"
+    db=$(db_for_region "$r")
+    if [ "$APPLY" -eq 1 ]; then
+        ssh "$SSH" "sudo env db='$db' file='$INSTANCES_FILE' python3" <<'PY'
+import os
+from pathlib import Path
+db = os.environ["db"]
+path = Path(os.environ["file"])
+raw = path.read_text(encoding="utf-8") if path.exists() else ""
+lines = raw.splitlines()
+existing = {
+    ln.strip()
+    for ln in lines
+    if ln.strip() and not ln.strip().startswith("#")
+}
+if db in existing:
+    print(f"instances: {db} already listed")
+else:
+    with path.open("a", encoding="utf-8") as f:
+        if raw and not raw.endswith("\n"):
+            f.write("\n")
+        f.write(db + "\n")
+    print(f"instances: appended {db}")
+PY
+    else
+        echo "DRY-RUN append $db to $INSTANCES_FILE"
+    fi
 done
 
-echo "== 3/5: wait for /v1/mirrors live (timeout ${WAIT_TIMEOUT}s) =="
+echo "== 3/6: start public-mirror@DATABASE sequentially =="
 for r in $(echo "$REGIONS" | tr ',' ' '); do
-    db="bitcraft-live-${r}"
-    port=$((3000 + r))
+    db=$(db_for_region "$r")
+    port=$(port_for_region "$r")
     sidecar=$((port + MIRROR_STATUS_PORT_OFFSET))
     url="http://127.0.0.1:${sidecar}/v1/mirrors"
+    run_remote "sudo systemctl start public-mirror@${db}.service"
+    echo "   waiting for $db live on $url (timeout ${WAIT_TIMEOUT}s)"
     if [ "$APPLY" -eq 1 ]; then
         ssh "$SSH" "python3 - '${db}' '${url}' '${WAIT_TIMEOUT}'" <<'PY'
 import json, sys, time, urllib.request
@@ -146,14 +186,20 @@ PY
 done
 
 if [ "$NATIVE_PORTS" -eq 0 ]; then
-    echo "== 4/5: nginx :300N → ${MIRROR_UPSTREAM} for cutover regions =="
+    echo "== 4/6: nginx :300N → ${MIRROR_UPSTREAM} for cutover regions =="
     NGINX_SITE="/etc/nginx/sites-available/relay-frontends"
     REGIONS_CSV="$REGIONS"
     if [ "$APPLY" -eq 1 ]; then
         ssh "$SSH" "sudo REGIONS='${REGIONS_CSV}' UPSTREAM='${MIRROR_UPSTREAM}' SITE='${NGINX_SITE}' python3" <<'PY'
-import os, re, sys
+import os, re
 
-regions = [int(x) for x in os.environ["REGIONS"].split(",") if x.strip()]
+def port_for(token: str) -> int:
+    t = token.strip()
+    if t == "global":
+        return 3000
+    return 3000 + int(t)
+
+regions = [port_for(x) for x in os.environ["REGIONS"].split(",") if x.strip()]
 upstream = os.environ["UPSTREAM"].strip()
 upstream_port = upstream.rsplit(":", 1)[-1] if ":" in upstream else upstream
 path = os.environ["SITE"]
@@ -179,8 +225,8 @@ if m:
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
             existing[int(parts[0])] = parts[1]
 
-for r in regions:
-    existing[3000 + r] = upstream_port
+for port in regions:
+    existing[port] = upstream_port
 
 lines = [f"    {port} {dest};" for port, dest in sorted(existing.items())]
 lines.append("    default $server_port;")
@@ -200,8 +246,8 @@ content = re.sub(
 
 with open(path, "w", encoding="utf-8") as f:
     f.write(content)
-for r in regions:
-    print(f"nginx: :{3000 + r} → 127.0.0.1:{upstream_port} via relay_upstream_port map")
+for port in regions:
+    print(f"nginx: :{port} → 127.0.0.1:{upstream_port} via relay_upstream_port map")
 PY
     else
         echo "DRY-RUN nginx map cutover for regions ${REGIONS_CSV} → ${MIRROR_UPSTREAM}"
@@ -209,30 +255,89 @@ PY
     run_remote "sudo cp ${NGINX_SITE} /etc/nginx/sites-enabled/relay-frontends && \
         sudo nginx -t && sudo nginx -s reload"
 else
-    echo "== 4/5: nginx unchanged (native ports — :300N stays on public-mirror@N) =="
+    echo "== 4/6: nginx unchanged (native ports — :300N stays on public-mirror@N) =="
 fi
 
-echo "== 5/5: relay-cache + relay-coordinator hybrid mirror config =="
+echo "== 5/6: rebuild cache/coordinator drop-ins from instances file =="
 CACHE_DROPIN="/etc/systemd/system/relay-cache.service.d/public-mirror-cutover.conf"
 COORD_DROPIN="/etc/systemd/system/relay-coordinator.service.d/public-mirror-cutover.conf"
-SCHEMA_REGION=$(echo "$REGIONS" | cut -d, -f1)
+if [ "$NATIVE_PORTS" -eq 1 ]; then
+    # Build comma-separated sidecar URLs from the full instances file so
+    # incremental cutovers keep previously migrated regions.
+    if [ "$APPLY" -eq 1 ]; then
+        MIRRORS_URL=$(ssh "$SSH" "OFFSET='$MIRROR_STATUS_PORT_OFFSET' FILE='$INSTANCES_FILE' python3" <<'PY'
+import os
+from pathlib import Path
+
+offset = int(os.environ["OFFSET"])
+path = Path(os.environ["FILE"])
+urls = []
+for line in path.read_text(encoding="utf-8").splitlines():
+    db = line.strip()
+    if not db or db.startswith("#"):
+        continue
+    if db == "bitcraft-live-global" or db.endswith("-global"):
+        port = 3000
+    elif db.startswith("bitcraft-live-"):
+        port = 3000 + int(db.split("-")[-1])
+    else:
+        continue
+    urls.append(f"http://127.0.0.1:{port + offset}/v1/mirrors")
+print(",".join(urls))
+PY
+)
+        MIRROR_WS_HOST=""
+        SCHEMA_DB=$(ssh "$SSH" "FILE='$INSTANCES_FILE' python3" <<'PY'
+from pathlib import Path
+import os
+path = Path(os.environ["FILE"])
+for line in path.read_text(encoding="utf-8").splitlines():
+    db = line.strip()
+    if db and not db.startswith("#"):
+        print(db)
+        break
+PY
+)
+        case "$SCHEMA_DB" in
+            bitcraft-live-global) SCHEMA_PORT=3000 ;;
+            bitcraft-live-*) SCHEMA_PORT=$((3000 + ${SCHEMA_DB#bitcraft-live-})) ;;
+            *) SCHEMA_PORT=3007 ;;
+        esac
+    else
+        MIRRORS_URL="<from $INSTANCES_FILE>"
+        SCHEMA_DB="bitcraft-live-7"
+        SCHEMA_PORT=3007
+    fi
+else
+    SCHEMA_DB=$(db_for_region "$(echo "$REGIONS" | cut -d, -f1)")
+    SCHEMA_PORT=$(port_for_region "$(echo "$REGIONS" | cut -d, -f1)")
+fi
+
+echo "   mirrors_url=$MIRRORS_URL"
+echo "   schema=$SCHEMA_DB @ 127.0.0.1:$SCHEMA_PORT"
+
 run_remote "sudo mkdir -p /etc/systemd/system/relay-cache.service.d /etc/systemd/system/relay-coordinator.service.d"
 run_remote "printf '%s\n' \
     '[Service]' \
     'Environment=RELAY_CACHE_MIRRORS_URL=${MIRRORS_URL}' \
     'Environment=RELAY_CACHE_MIRROR_WS_HOST=${MIRROR_WS_HOST}' \
-    'Environment=RELAY_CACHE_SCHEMA_HOST=127.0.0.1:$((3000 + SCHEMA_REGION))' \
-    'Environment=RELAY_CACHE_SCHEMA_DB=bitcraft-live-${SCHEMA_REGION}' \
+    'Environment=RELAY_CACHE_SCHEMA_HOST=127.0.0.1:${SCHEMA_PORT}' \
+    'Environment=RELAY_CACHE_SCHEMA_DB=${SCHEMA_DB}' \
     | sudo tee ${CACHE_DROPIN} >/dev/null"
 run_remote "printf '%s\n' \
     '[Service]' \
     'Environment=RELAY_MIRRORS_URL=${MIRRORS_URL}' \
     | sudo tee ${COORD_DROPIN} >/dev/null"
-run_remote "sudo systemctl daemon-reload && sudo systemctl restart relay-coordinator relay-cache"
+
+echo "== 6/6: reload units + restart relay-cache + relay-coordinator =="
+# Coordinator restart re-reads drop-in RELAY_MIRRORS_URL. Sequencer is
+# idempotent for already-live instances (poll /v1/mirrors, skip start).
+run_remote "sudo systemctl daemon-reload && \
+    sudo systemctl restart relay-cache.service relay-coordinator.service"
 
 echo
 echo "Done. Verify:"
-echo "  systemctl is-active public-mirror@bitcraft-live-7 public-mirror@bitcraft-live-8"
+echo "  systemctl is-active public-mirror@bitcraft-live-7"
 echo "  curl -s http://127.0.0.1:8082/health | python3 -m json.tool"
 echo "  curl -s http://127.0.0.1:8089/cache-health | python3 -m json.tool"
 echo
