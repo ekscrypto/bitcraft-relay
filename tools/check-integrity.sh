@@ -28,8 +28,8 @@
 #   HARNESS=./target/release/relay-test-harness ./tools/check-integrity.sh
 #   TIMEOUT=20 TABLE=admin_broadcast ./tools/check-integrity.sh
 #
-# The harness binary must be built first:
-#   cargo build -p relay-test-harness --release
+# The harness binary must be built first (sibling spacetimedb-relay):
+#   (cd ../spacetimedb-relay && cargo build -p relay-test-harness --release)
 #
 # Exit codes:
 #   0  every live region passed all four checks
@@ -44,28 +44,39 @@ set -u
 HOST="${HOST:-relay.bitcraftsync.app}"
 TIMEOUT="${TIMEOUT:-30}"
 TABLE="${TABLE:-admin_broadcast}"
-# Resolve the harness binary: explicit override, then repo-relative
-# release build, then repo-relative debug build.
+# Resolve the harness binary: explicit override, then bitcraft-relay
+# target/, then sibling spacetimedb-relay target/ (split-sibling layout).
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-HARNESS="${HARNESS:-$REPO/target/release/relay-test-harness}"
-if [ ! -x "$HARNESS" ]; then
-    HARNESS="$REPO/target/debug/relay-test-harness"
+SIBLING_CORE=$(cd "$REPO/../spacetimedb-relay" 2>/dev/null && pwd || true)
+if [ -z "${HARNESS:-}" ]; then
+    for candidate in \
+        "$REPO/target/release/relay-test-harness" \
+        "$REPO/target/debug/relay-test-harness" \
+        "${SIBLING_CORE:+$SIBLING_CORE/target/release/relay-test-harness}" \
+        "${SIBLING_CORE:+$SIBLING_CORE/target/debug/relay-test-harness}"
+    do
+        [ -n "$candidate" ] || continue
+        if [ -x "$candidate" ]; then
+            HARNESS="$candidate"
+            break
+        fi
+    done
 fi
-if [ ! -x "$HARNESS" ]; then
+if [ -z "${HARNESS:-}" ] || [ ! -x "$HARNESS" ]; then
     echo "FAIL: relay-test-harness binary not found." >&2
-    echo "  Build it first: cargo build -p relay-test-harness --release" >&2
+    echo "  Build it first: (cd ../spacetimedb-relay && cargo build -p relay-test-harness --release)" >&2
     echo "  or set HARNESS=/path/to/relay-test-harness" >&2
     exit 2
 fi
 
-# The mirror database name for a public port, per PORTS.md:
-# 3000 -> relay-mirror-bc-global, 30NN -> relay-mirror-bcNN.
+# The mirrored database name for a public port, per PORTS.md / public-mirror:
+# 3000 -> bitcraft-live-global, 30NN -> bitcraft-live-N.
 database_for() {
     if [ "$1" = "3000" ]; then
-        echo "relay-mirror-bc-global"
+        echo "bitcraft-live-global"
     else
-        echo "relay-mirror-bc$(( $1 - 3000 ))"
+        echo "bitcraft-live-$(( $1 - 3000 ))"
     fi
 }
 
@@ -90,8 +101,9 @@ database_for() {
 port_is_live() {
     port=$1
     db=$(database_for "$port")
+    # SpacetimeDB requires ?version=9 (or 10); bare /schema returns 400.
     out=$(curl -s -o /dev/null -w "%{http_code} %{size_download}" --max-time 6 \
-        "https://${HOST}:${port}/v1/database/${db}/schema" 2>/dev/null)
+        "https://${HOST}:${port}/v1/database/${db}/schema?version=9" 2>/dev/null)
     code=${out%% *}
     size=${out##* }
     # 200 + a real body (>= 512 bytes; any schema is kilobytes).
