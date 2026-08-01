@@ -294,8 +294,9 @@
   <p class="section-note" style="margin-top: 10px;">
     Status is each source&rsquo;s <code>connectivity</code>
     (<code>connecting</code> / <code>subscribing</code> / <code>live</code> /
-    <code>disconnected</code>); throughput is the lifetime
-    <code>transactions_processed</code> counter; uptime is duration since
+    <code>disconnected</code>); throughput is
+    <code>transactions_per_sec</code> from the coordinator&rsquo;s 60&times;1s
+    rotating window (or legacy <code>updates/s</code>); uptime is duration since
     <code>connected_since</code> (or reconnect ETA when disconnected). Host
     CPU / memory / network stay in the system cards above.
   </p>
@@ -851,29 +852,42 @@
       '">' + escapeHtml(label) + "</span>";
   }
 
-  // Throughput: prefer lifetime transactions_processed; fall back to
-  // legacy metrics.upstream units_1m → updates/s.
+  // Throughput: coordinator `transactions_per_sec` (60×1s ring); legacy → updates/s.
   function throughputCell(s) {
-    if (s.transactions_processed != null) {
-      var title = "lifetime transactions processed";
+    if (s.transactions_processed != null || s.transactions_per_sec != null) {
+      var tx = s.transactions_processed;
+      var rate = (typeof s.transactions_per_sec === "number")
+        ? s.transactions_per_sec : null;
+
+      var parts = [];
+      if (tx != null) parts.push("lifetime: " + formatUnits(tx) + " tx");
+      parts.push("window: 60×1s rotating mean (coordinator)");
       if (s.tables_live != null && s.tables_total != null) {
-        title += "\ntables " + s.tables_live + "/" + s.tables_total;
+        parts.push("tables " + s.tables_live + "/" + s.tables_total);
       }
-      return '<span class="mono" title="' + escapeHtml(title) + '">' +
-        formatUnits(s.transactions_processed) + " tx</span>";
+      if (rate == null) {
+        return '<span class="mono" title="' + escapeHtml(parts.join("\n")) +
+          '">—</span>';
+      }
+      var stalled = sourceConnectivity(s) === "live" && rate < 0.5;
+      if (stalled) parts.push("stalled: <0.5 tx/s over sample window");
+      var style = stalled ? ' style="color: var(--warn);"' : "";
+      return '<span class="mono"' + style + ' title="' +
+        escapeHtml(parts.join("\n")) + '">' +
+        formatUnits(Math.round(rate)) + " tx/s</span>";
     }
     var up = s.metrics && s.metrics.upstream;
     if (!up || up.units_1m == null) return "";
-    var stalled = up.state === "up" && up.units_1m === 0;
+    var stalledLegacy = up.state === "up" && up.units_1m === 0;
     var main = formatUnits(Math.round(up.units_1m / 60)) + " updates/s";
-    var parts = [];
-    if (stalled) parts.push("stalled: 0 updates in the last 60s");
+    var legacyParts = [];
+    if (stalledLegacy) legacyParts.push("stalled: 0 updates in the last 60s");
     if (up.units_5m != null) {
-      parts.push("5-min avg: " + Math.round(up.units_5m / 300) + " updates/s");
+      legacyParts.push("5-min avg: " + Math.round(up.units_5m / 300) + " updates/s");
     }
-    var style = stalled ? ' style="color: var(--warn);"' : "";
-    return '<span class="mono"' + style + ' title="' +
-      escapeHtml(parts.join("\n")) + '">' + main + "</span>";
+    var styleLegacy = stalledLegacy ? ' style="color: var(--warn);"' : "";
+    return '<span class="mono"' + styleLegacy + ' title="' +
+      escapeHtml(legacyParts.join("\n")) + '">' + main + "</span>";
   }
 
   // Uptime: prefer connected_since → duration; when disconnected show
@@ -1094,6 +1108,8 @@
               tables_total: s.tables_total != null ? s.tables_total : null,
               transactions_processed: s.transactions_processed != null
                 ? s.transactions_processed : null,
+              transactions_per_sec: (typeof s.transactions_per_sec === "number")
+                ? s.transactions_per_sec : null,
               connected_since: s.connected_since || null,
               disconnected_since: s.disconnected_since || null,
               next_attempt_eta_secs: s.next_attempt_eta_secs != null
