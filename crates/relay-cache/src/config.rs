@@ -72,7 +72,7 @@ pub struct Args {
     #[arg(
         long,
         env = "RELAY_CACHE_MEM_CEILING_BYTES",
-        default_value_t = 4 * 1024 * 1024 * 1024
+        default_value_t = 8 * 1024 * 1024 * 1024
     )]
     pub mem_ceiling_bytes: u64,
 

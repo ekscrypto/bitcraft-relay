@@ -28,7 +28,7 @@ On the relay host, defaults discover regions from
 - `--unit-dir` / `RELAY_CACHE_UNIT_DIR`
 - `--schema-host` / `RELAY_CACHE_SCHEMA_HOST`
 - `--schema-db` / `RELAY_CACHE_SCHEMA_DB`
-- `--mem-ceiling-bytes` / `RELAY_CACHE_MEM_CEILING_BYTES` (default 4 GiB)
+- `--mem-ceiling-bytes` / `RELAY_CACHE_MEM_CEILING_BYTES` (default 8 GiB)
 - `--debug` / `RELAY_CACHE_DEBUG` — 5s heartbeats while waiting on
   `SubscribeApplied` (phase + elapsed), WS ping during that wait, and
   `relay_cache=debug` when `RUST_LOG` is unset. Always-on info logs already

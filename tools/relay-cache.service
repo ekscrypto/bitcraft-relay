@@ -34,6 +34,9 @@ Environment="RELAY_CACHE_MIRROR_WS_HOST="
 Environment="RELAY_CACHE_SCHEMA_HOST=127.0.0.1:3007"
 Environment="RELAY_CACHE_SCHEMA_DB=bitcraft-live-7"
 Environment="RUST_LOG=relay_cache=info"
+# App soft alarm for /cache-health ready=false (not a load shedder).
+# Keep in sync with MemoryHigh below.
+Environment="RELAY_CACHE_MEM_CEILING_BYTES=8589934592"
 Restart=on-failure
 RestartSec=5s
 # Initial SubscribeApplied for inventory-heavy regions can take minutes.
