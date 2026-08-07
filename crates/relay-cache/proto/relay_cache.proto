@@ -237,6 +237,8 @@ message Craft {
   string building_name = 10;
   uint64 claim_entity_id = 11;
   repeated CraftedItem crafted_item = 12;
+  bool is_passive = 13;
+  bool is_public = 14;
 }
 
 message ClaimCrafts {

@@ -120,7 +120,8 @@ curl -s 'http://127.0.0.1:8089/claim/1234567890/crafts?completed=false'
 #        "total_actions_required", "completed",
 #        "owner_entity_id", "owner_username",
 #        "building_entity_id", "building_name", "claim_entity_id",
-#        "crafted_item": [ { "item_id", "quantity", "item_type" } ] }, ...
+#        "crafted_item": [ { "item_id", "quantity", "item_type" } ],
+#        "is_passive", "is_public" }, ...
 #    ], "count": N }
 
 # Crafts owned by a player (any claim), same completed filter.

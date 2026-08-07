@@ -26,6 +26,7 @@ pub mod player_housing;
 pub mod player_state;
 pub mod player_username;
 pub mod progressive_action;
+pub mod public_progressive_action;
 pub mod rent;
 pub mod resource;
 pub mod resource_growth_timer;
@@ -53,6 +54,7 @@ pub use player_housing::{PlayerHousingDescStore, PlayerHousingSoA};
 pub use player_state::PlayerStateSoA;
 pub use player_username::PlayerUsernameSoA;
 pub use progressive_action::ProgressiveActionSoA;
+pub use public_progressive_action::PublicProgressiveActionStore;
 pub use resource_growth_timer::ResourceGrowthTimerStore;
 pub use rent::RentSoA;
 pub use resource::ResourceSoA;
@@ -89,6 +91,7 @@ pub struct RegionStore {
     pub experience: ExperienceSoA,
     pub skill_desc: SkillDescStore,
     pub progressive_action: ProgressiveActionSoA,
+    pub public_progressive_action: PublicProgressiveActionStore,
     pub passive_craft: PassiveCraftSoA,
     pub crafting_recipe_desc: CraftingRecipeDescStore,
     pub resource: ResourceSoA,
@@ -125,6 +128,7 @@ impl RegionStore {
             experience: ExperienceSoA::with_capacity(0),
             skill_desc: SkillDescStore::new(),
             progressive_action: ProgressiveActionSoA::with_capacity(0),
+            public_progressive_action: PublicProgressiveActionStore::new(),
             passive_craft: PassiveCraftSoA::with_capacity(0),
             crafting_recipe_desc: CraftingRecipeDescStore::new(),
             resource: ResourceSoA::with_capacity(0),

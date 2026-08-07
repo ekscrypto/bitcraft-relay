@@ -22,8 +22,9 @@ use crate::decode::{
     DEPLOYABLE_DESC_TABLE, DEPLOYABLE_TABLE, DIMENSION_NETWORK_TABLE, EXPERIENCE_TABLE,
     GROWTH_TABLE, HEXITE_DEPOSIT_RESOURCE_ID, INVENTORY_TABLE, LOCATION_TABLE, MOBILE_ENTITY_TABLE,
     OVERWORLD_DIMENSION, PASSIVE_CRAFT_TABLE, PLAYER_HOUSING_DESC_TABLE, PLAYER_HOUSING_TABLE,
-    PLAYER_STATE_TABLE, PLAYER_USERNAME_TABLE, PROGRESSIVE_ACTION_TABLE, RENT_TABLE,
-    RESOURCE_GROWTH_TIMER_TABLE, RESOURCE_TABLE, SKILL_DESC_TABLE, STORAGE_LOG_TABLE,
+    PLAYER_STATE_TABLE, PLAYER_USERNAME_TABLE, PROGRESSIVE_ACTION_TABLE,
+    PUBLIC_PROGRESSIVE_ACTION_TABLE, RENT_TABLE, RESOURCE_GROWTH_TIMER_TABLE, RESOURCE_TABLE,
+    SKILL_DESC_TABLE, STORAGE_LOG_TABLE,
 };
 use crate::discovery::RegionBackend;
 use crate::interest::{InterestHub, TouchBatch};
@@ -76,6 +77,7 @@ struct TableMeta {
     experience_fields: Vec<MirroredField>,
     skill_desc_fields: Vec<MirroredField>,
     progressive_action_fields: Vec<MirroredField>,
+    public_progressive_action_fields: Vec<MirroredField>,
     passive_craft_fields: Vec<MirroredField>,
     crafting_recipe_desc_fields: Vec<MirroredField>,
     resource_fields: Vec<MirroredField>,
@@ -112,6 +114,10 @@ impl TableMeta {
             experience_fields: fields_owned(schema, EXPERIENCE_TABLE)?,
             skill_desc_fields: fields_owned(schema, SKILL_DESC_TABLE)?,
             progressive_action_fields: fields_owned(schema, PROGRESSIVE_ACTION_TABLE)?,
+            public_progressive_action_fields: fields_owned(
+                schema,
+                PUBLIC_PROGRESSIVE_ACTION_TABLE,
+            )?,
             passive_craft_fields: fields_owned(schema, PASSIVE_CRAFT_TABLE)?,
             crafting_recipe_desc_fields: fields_owned(schema, CRAFTING_RECIPE_DESC_TABLE)?,
             resource_fields: fields_owned(schema, RESOURCE_TABLE)?,
@@ -740,6 +746,7 @@ fn base_subscribe_queries() -> Vec<String> {
         format!("SELECT * FROM {EXPERIENCE_TABLE}"),
         format!("SELECT * FROM {SKILL_DESC_TABLE}"),
         format!("SELECT * FROM {PROGRESSIVE_ACTION_TABLE}"),
+        format!("SELECT * FROM {PUBLIC_PROGRESSIVE_ACTION_TABLE}"),
         format!("SELECT * FROM {PASSIVE_CRAFT_TABLE}"),
         format!("SELECT * FROM {CRAFTING_RECIPE_DESC_TABLE}"),
         // Two equality filters — safer than OR for SpacetimeDB SQL.
@@ -1491,6 +1498,45 @@ fn apply_rows(
                     );
                 }
                 store.progressive_action.upsert(decoded);
+            }
+        }
+        PUBLIC_PROGRESSIVE_ACTION_TABLE => {
+            // Flag-join only: presence of entity_id marks a progressive craft
+            // public. Visibility can flip without a progressive row change, so
+            // touch the same craft interest path as progressive/passive TUs.
+            for row in deletes {
+                let decoded = decode::decode_public_progressive_action_with_fields(
+                    row,
+                    &meta.public_progressive_action_fields,
+                    meta.cols.public_progressive_action,
+                    schema,
+                )?;
+                if let Some(t) = touches.as_deref_mut() {
+                    touch_craft(
+                        store,
+                        decoded.owner_entity_id,
+                        decoded.building_entity_id,
+                        t,
+                    );
+                }
+                store.public_progressive_action.delete(decoded.entity_id);
+            }
+            for row in inserts {
+                let decoded = decode::decode_public_progressive_action_with_fields(
+                    row,
+                    &meta.public_progressive_action_fields,
+                    meta.cols.public_progressive_action,
+                    schema,
+                )?;
+                if let Some(t) = touches.as_deref_mut() {
+                    touch_craft(
+                        store,
+                        decoded.owner_entity_id,
+                        decoded.building_entity_id,
+                        t,
+                    );
+                }
+                store.public_progressive_action.upsert(decoded.entity_id);
             }
         }
         PASSIVE_CRAFT_TABLE => {

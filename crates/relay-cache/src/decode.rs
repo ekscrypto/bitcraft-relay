@@ -54,6 +54,10 @@ pub const RENT_TABLE: &str = "rent_state";
 pub const EXPERIENCE_TABLE: &str = "experience_state";
 pub const SKILL_DESC_TABLE: &str = "skill_desc";
 pub const PROGRESSIVE_ACTION_TABLE: &str = "progressive_action_state";
+/// Presence set written by `craft_set_public` — progressive crafts whose
+/// `entity_id` appears here are shared (`is_public`). Passive crafts never
+/// appear; used only as a flag join onto `progressive_action_state`.
+pub const PUBLIC_PROGRESSIVE_ACTION_TABLE: &str = "public_progressive_action_state";
 pub const PASSIVE_CRAFT_TABLE: &str = "passive_craft_state";
 pub const CRAFTING_RECIPE_DESC_TABLE: &str = "crafting_recipe_desc";
 pub const RESOURCE_TABLE: &str = "resource_state";
@@ -171,6 +175,13 @@ pub struct ProgressiveActionCols {
     pub progress: usize,
     pub recipe_id: usize,
     pub craft_count: usize,
+    pub owner_entity_id: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct PublicProgressiveActionCols {
+    pub entity_id: usize,
+    pub building_entity_id: usize,
     pub owner_entity_id: usize,
 }
 
@@ -364,6 +375,7 @@ pub struct ColMaps {
     pub experience: ExperienceCols,
     pub skill_desc: SkillDescCols,
     pub progressive_action: ProgressiveActionCols,
+    pub public_progressive_action: PublicProgressiveActionCols,
     pub passive_craft: PassiveCraftCols,
     pub crafting_recipe_desc: CraftingRecipeDescCols,
     pub resource: ResourceCols,
@@ -399,6 +411,7 @@ pub fn resolve_cols(schema: &MirroredSchema) -> Result<ColMaps> {
         experience: resolve_experience_cols(schema)?,
         skill_desc: resolve_skill_desc_cols(schema)?,
         progressive_action: resolve_progressive_action_cols(schema)?,
+        public_progressive_action: resolve_public_progressive_action_cols(schema)?,
         passive_craft: resolve_passive_craft_cols(schema)?,
         crafting_recipe_desc: resolve_crafting_recipe_desc_cols(schema)?,
         resource: resolve_resource_cols(schema)?,
@@ -537,6 +550,21 @@ fn resolve_progressive_action_cols(schema: &MirroredSchema) -> Result<Progressiv
         recipe_id: find_field(f, "recipe_id", PROGRESSIVE_ACTION_TABLE)?,
         craft_count: find_field(f, "craft_count", PROGRESSIVE_ACTION_TABLE)?,
         owner_entity_id: find_field(f, "owner_entity_id", PROGRESSIVE_ACTION_TABLE)?,
+    })
+}
+
+fn resolve_public_progressive_action_cols(
+    schema: &MirroredSchema,
+) -> Result<PublicProgressiveActionCols> {
+    let f = fields_of(schema, PUBLIC_PROGRESSIVE_ACTION_TABLE)?;
+    Ok(PublicProgressiveActionCols {
+        entity_id: find_field(f, "entity_id", PUBLIC_PROGRESSIVE_ACTION_TABLE)?,
+        building_entity_id: find_field(
+            f,
+            "building_entity_id",
+            PUBLIC_PROGRESSIVE_ACTION_TABLE,
+        )?,
+        owner_entity_id: find_field(f, "owner_entity_id", PUBLIC_PROGRESSIVE_ACTION_TABLE)?,
     })
 }
 
@@ -1014,6 +1042,13 @@ pub struct ProgressiveActionRow {
     pub progress: i32,
     pub recipe_id: i32,
     pub craft_count: i32,
+    pub owner_entity_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicProgressiveActionRow {
+    pub entity_id: u64,
+    pub building_entity_id: u64,
     pub owner_entity_id: u64,
 }
 
@@ -1650,6 +1685,26 @@ pub fn decode_progressive_action_with_fields(
         owner_entity_id: cell_u64(
             &cells[cols.owner_entity_id],
             "progressive_action.owner_entity_id",
+        )?,
+    })
+}
+
+pub fn decode_public_progressive_action_with_fields(
+    row: &[u8],
+    fields: &[MirroredField],
+    cols: PublicProgressiveActionCols,
+    schema: &MirroredSchema,
+) -> Result<PublicProgressiveActionRow> {
+    let cells = bsatn::decode_row(row, fields, schema).map_err(|e| anyhow!("bsatn: {e}"))?;
+    Ok(PublicProgressiveActionRow {
+        entity_id: cell_u64(&cells[cols.entity_id], "public_progressive_action.entity_id")?,
+        building_entity_id: cell_u64(
+            &cells[cols.building_entity_id],
+            "public_progressive_action.building_entity_id",
+        )?,
+        owner_entity_id: cell_u64(
+            &cells[cols.owner_entity_id],
+            "public_progressive_action.owner_entity_id",
         )?,
     })
 }

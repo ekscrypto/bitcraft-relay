@@ -543,6 +543,7 @@ fn region_rows(s: &RegionStore) -> Value {
         "experience": s.experience.len(),
         "skill_desc": s.skill_desc.len(),
         "progressive_action": s.progressive_action.len(),
+        "public_progressive_action": s.public_progressive_action.len(),
         "passive_craft": s.passive_craft.len(),
         "crafting_recipe_desc": s.crafting_recipe_desc.len(),
         "resource": s.resource.len(),
@@ -954,6 +955,8 @@ fn craft_to_json(c: &pb::Craft) -> Value {
         "building_name": c.building_name,
         "claim_entity_id": c.claim_entity_id.to_string(),
         "crafted_item": crafted_item,
+        "is_passive": c.is_passive,
+        "is_public": c.is_public,
     })
 }
 
@@ -1792,6 +1795,8 @@ fn craft_from_progressive(s: &RegionStore, slot: u32) -> pb::Craft {
         building_name,
         claim_entity_id,
         crafted_item,
+        is_passive: false,
+        is_public: s.public_progressive_action.contains(entity_id),
     }
 }
 
@@ -1820,6 +1825,8 @@ fn craft_from_passive(s: &RegionStore, slot: u32) -> pb::Craft {
         building_name,
         claim_entity_id,
         crafted_item,
+        is_passive: true,
+        is_public: false,
     }
 }
 
