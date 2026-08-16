@@ -6,52 +6,36 @@ prevent confusion that's specific to this project's split layout.
 
 ## What this repo is (and isn't)
 
-`bitcraft-relay` is the **BitCraft-specific layer** only:
+`bitcraft-relay` is the **BitCraft-specific ops layer** only:
 
-- `crates/relay-cache/` — same-host in-memory read cache over the relay
-  fleet (the one crate in the workspace: `members = ["crates/relay-cache"]`).
 - `www/` — fleet dashboard, in-browser table explorer, tutorial site.
 - `tools/` — systemd unit(s), nginx snippets, fleet shell scripts.
 - `BITCRAFT.md` / `PORTS.md` — BitCraft upstream architecture + port scheme.
 
-The **generic relay core** lives in the sibling repo
+The **Rust code** (the `relay-cache` read cache) lived here until 2026-08;
+it now lives in the sibling fork
+[`ekscrypto/spacetimedb-bitcraft-mirror`](https://github.com/ekscrypto/spacetimedb-bitcraft-mirror)
+(`crates/relay-cache`), which also embeds it into the BitCraft-tuned
+mirror binary via `--bitcraft-cache`. The standalone WebSocket-mode
+`relay-cache` binary still builds from that repo unchanged. The
+**generic relay core** remains in the sibling repo
 [`ekscrypto/spacetimedb-relay`](https://github.com/ekscrypto/spacetimedb-relay)
-and is consumed as a workspace dependency (see "Sibling repo access"
-below). Do not expect to find the relay daemon, the publisher, the
-frontend proxy, or the per-region systemd units in this repo — they
-are not here.
+(consumed by the fork as a path dep). Do not expect to find the relay
+daemon, the publisher, the frontend proxy, or the per-region systemd
+units in this repo — they are not here.
 
-## Sibling repo access (`../spacetimedb-relay`)
+## Where `relay-cache` builds (`../spacetimedb-bitcraft-mirror`)
 
-`Cargo.toml` consumes two crates from the sibling generic repo:
-
-```toml
-relay-protocol    = { path = "../spacetimedb-relay/crates/relay-protocol" }
-relay-coordinator = { path = "../spacetimedb-relay/crates/relay-coordinator" }
+```sh
+git -C ../spacetimedb-bitcraft-mirror pull
+(cd ../spacetimedb-bitcraft-mirror && cargo build -p relay-cache --release)
 ```
 
-**No authorization or special access is required.** The path dep is a
-plain filesystem read; the sibling checkout already exists at exactly
-that path on this workstation, and it is readable like any other folder.
-If an agent believes it "can't access" the sibling repo, that belief is
-wrong — it is a normal local directory, not a remote or a gated
-resource.
-
-Two things to know about the active form:
-
-1. **It's a path dep, not a git dep.** The build uses whatever is
-   checked out in `../spacetimedb-relay`. The prod-ready git-dep form
-   (tag `relay-core-v2.2.0`) is documented inline in `Cargo.toml` but
-   **not** active. To build against the published tag locally, either
-   check the sibling out at the tag (`git -C ../spacetimedb-relay
-   checkout relay-core-v2.2.0`) or swap `Cargo.toml` to the git-dep
-   lines.
-2. **The sibling is the source of the relay binary.** The relay daemon
-   (`crates/relay`, plus `relay-frontend`, `relay-publisher`,
-   `relay-upstream`, `relay-mirror-driver`) builds in the sibling
-   workspace, not here. Ops scripts here reference
-   `/srv/relay/spacetimedb-relay/target/release/relay` on the host —
-   that path mirrors the sibling's layout.
+That repo path-deps `relay-protocol` / `relay-coordinator` from
+`../spacetimedb-relay`, so **both siblings must be checked out** to build
+(no authorization needed — plain filesystem reads; the siblings already
+exist at exactly those paths on this workstation). Day-to-day deploys
+build it there — see [`../DEPLOY.md`](../DEPLOY.md).
 
 ## What it takes to update the full production fleet
 
@@ -91,10 +75,10 @@ before proceeding.
 
 ## Local build
 
-Requires a readable `../spacetimedb-relay` checkout (present by
-default on this workstation):
+Happens in the sibling fork (see "Where `relay-cache` builds" above):
 
 ```sh
+cd ../spacetimedb-bitcraft-mirror
 cargo build -p relay-cache --release
 cargo test  -p relay-cache
 cargo run   -p relay-cache --release
@@ -118,9 +102,10 @@ Full runbook (trial soak, env vars, gotchas, full-host rollback):
 - Comments only when the WHY is non-obvious.
 - `anyhow::Result` at binary boundaries, `thiserror` inside libraries.
 - No `unwrap()` in production code paths.
-- External deps go in the root `Cargo.toml` `[workspace.dependencies]`,
-  and **must** match the versions pinned in the sibling repo's
-  `Cargo.toml` so SpacetimeDB wire-format versions line up.
+- Rust changes belong in `../spacetimedb-bitcraft-mirror` (relay-cache) or
+  `../spacetimedb-relay` (generic core); external dep versions must stay
+  aligned across those workspaces so SpacetimeDB wire-format versions line
+  up.
 
 ## Security rules (non-negotiable)
 

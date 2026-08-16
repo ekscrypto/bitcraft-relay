@@ -1,6 +1,5 @@
-/target/
-**/*.rs.bk
-Cargo.lock.bak
+# (Rust build artifacts moved to ../spacetimedb-bitcraft-mirror with the
+# relay-cache crate; nothing to ignore here anymore.)
 .env
 .env.local
 .DS_Store
