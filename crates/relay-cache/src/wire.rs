@@ -29,6 +29,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often `--debug` logs "still waiting" while a SubscribeApplied
 /// (often a multi-hundred-MB fragmented Binary) is still assembling.
 const WAIT_HEARTBEAT: Duration = Duration::from_secs(5);
+/// Hard ceiling for one Subscribe → SubscribeApplied exchange. A swallowed
+/// Subscribe on the mirror leaves the client waiting on a live socket with
+/// no reply and no error (observed 2026-08-16: regions 8/18/19 wedged 8h+
+/// until process restart); past this the session errors out and the shard
+/// loop reconnects with its normal backoff.
+const SUBSCRIBE_APPLIED_DEADLINE: Duration = Duration::from_secs(20 * 60);
 
 pub type Conn = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -135,7 +141,9 @@ pub async fn expect_initial_connection(conn: &mut Conn) -> Result<InitialConnect
 
 /// Block until `SubscribeApplied`. When `debug_mode`, emit a 5s heartbeat
 /// (and a WS Ping). `TransactionUpdate`s during the wait are forwarded to
-/// `on_update` so sequential bootstrap can stay consistent.
+/// `on_update` so sequential bootstrap can stay consistent. Aborts with an
+/// error after `SUBSCRIBE_APPLIED_DEADLINE` so a silently-swallowed
+/// Subscribe turns into an ordinary reconnect instead of a wedged region.
 pub async fn expect_subscribe_applied(
     conn: &mut Conn,
     region: u32,
@@ -148,6 +156,9 @@ pub async fn expect_subscribe_applied(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Skip the immediate first tick so we don't log before any wait.
     heartbeat.tick().await;
+    let deadline_sleep =
+        tokio::time::sleep_until(tokio::time::Instant::from_std(started + SUBSCRIBE_APPLIED_DEADLINE));
+    tokio::pin!(deadline_sleep);
 
     loop {
         tokio::select! {
@@ -206,6 +217,12 @@ pub async fn expect_subscribe_applied(
                     );
                     return Err(e);
                 }
+            }
+            _ = &mut deadline_sleep => {
+                bail!(
+                    "SubscribeApplied not received within {}s (region={region} phase={phase})",
+                    SUBSCRIBE_APPLIED_DEADLINE.as_secs()
+                );
             }
         }
     }
