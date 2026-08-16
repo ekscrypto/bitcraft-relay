@@ -7,6 +7,13 @@ historical public port band so existing client tooling that keys off
 `3000 + regionID` still works — every public port proxies to the same
 backend; the database name selects the region.
 
+> **Future topology (2026-08, not deployed).** `spacetimedb-bitcraft-mirror`
+> runs one process mirroring all regions **with the read cache embedded**
+> (`--bitcraft-cache`, cache API still on `127.0.0.1:8089`) — same public
+> port band, same URLs, but `relay-cache.service` and the per-instance
+> `public-mirror@*.service` fleet collapse into that single process. Nothing
+> in this document changes for clients.
+
 ## Formula (public ports — unchanged for clients)
 
 ```
