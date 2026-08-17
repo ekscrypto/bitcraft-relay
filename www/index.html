@@ -823,7 +823,7 @@
         cls = "up"; label = "live";
         pillTitle = total != null ? "live · tables " + (live != null ? live : total) + "/" + total : "live";
       }
-    } else if (conn === "connecting" || conn === "subscribing") {
+    } else if (conn === "connecting" || conn === "subscribing" || conn === "waiting") {
       cls = "warn"; label = conn;
       pillTitle = conn;
     } else if (conn === "disconnected") {
@@ -936,7 +936,7 @@
         main = formatDuration(upFor);
         parts.push("connected since " +
           new Date(s.connected_since).toLocaleString());
-      } else if (conn === "connecting" || conn === "subscribing") {
+      } else if (conn === "connecting" || conn === "subscribing" || conn === "waiting") {
         main = conn;
         parts.push(conn);
       }
