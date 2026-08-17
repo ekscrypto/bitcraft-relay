@@ -258,6 +258,12 @@ run_remote "avail=\$(awk '/^MemAvailable:/ {print \$2}' /proc/meminfo); \
     [ \"\$avail\" -ge 16777216 ] || { echo 'NOT enough headroom — rolling nothing back automatically; warm blue intact. Free memory or widen the warm set down (fewer warm regions) and re-run.' >&2; exit 1; }"
 
 echo "== 5/8: start green + wait for 14/14 live (timeout ${CUTOVER_WAIT_TIMEOUT}s) =="
+# Best-effort telemetry (CPU/iowait split, disk, green's own CPU+IO) so the
+# attempt is diagnosable even if it rolls back — see MULTI-MIRROR-UPSTREAM-
+# RESETS.md. Never blocks the cutover.
+run_remote "sudo test -x ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh && \
+    sudo ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh start || \
+    echo 'telemetry capture not started (continuing)'"
 run_remote "sudo systemctl enable --now bitcraft-mirror.service bitcraft-mirror-ram-guard.service && sleep 5 && \
     systemctl is-active bitcraft-mirror.service"
 run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-mirrors-live.sh \
