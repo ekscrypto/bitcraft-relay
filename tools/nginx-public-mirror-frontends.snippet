@@ -8,6 +8,19 @@
 #   proxy_pass http://127.0.0.1:$server_port;
 # After (public-mirror):
 #   proxy_pass http://127.0.0.1:3000;
+#
+# Dark-band IO guard (2026-08-17, MULTI-MIRROR-UPSTREAM-RESETS.md attempt
+# #4 — nginx log writeback was the 180 MB burst that starved the mirror's
+# page faults on the ~3 MB/s array). Keep these when editing:
+#   - /etc/nginx/nginx.conf http{}:
+#       access_log /var/log/nginx/access.log combined buffer=64k flush=5s;
+#     (batches log writes instead of one write(2) per request)
+#   - inside this file's server{} (the whole WS band is ONE server block):
+#       error_log /var/log/nginx/error.log crit;
+#     (suppresses [error]-level upstream-connect noise while the band is
+#      dark during cutover/rollback; access_log still records 502 codes)
+#   - /etc/logrotate.d/nginx: daily, rotate 14, nocompress — no gzip pass
+#     over ~6 GB/day of logs on the slow array; retention stays bounded.
 
 # Inside each `server { listen …:30NN ssl; … }` block:
 location / {
