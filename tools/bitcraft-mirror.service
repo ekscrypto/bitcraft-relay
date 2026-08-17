@@ -65,9 +65,14 @@ RestartSec=5s
 # Full-fleet cold seed measured ~6 minutes; allow much longer on a loaded host.
 TimeoutStartSec=0
 TimeoutStopSec=60s
-# Soft ceiling — whole fleet + cache peaks ~26 GiB (local measurement).
-# The ram-guard unit watches MemAvailable as the hard backstop.
-MemoryHigh=32G
+# Soft ceiling. Production steady state is ~35–37 GiB (2026-08-17, attempt #5);
+# the original 32G cap was set from the LOCAL soak (~26 GiB peak) and put green
+# permanently over memory.high in production — every charge was memcg-throttled
+# (154k+ throttle events, tokio workers D-stalled in mem_cgroup_handle_over_high,
+# dstack bursts ended 17:54:03, upstream RST'd r8 at 17:54:04). 48G leaves ~11 GiB
+# headroom over production state; the ram-guard unit (MemAvailable < 2 GiB) is the
+# hard backstop.
+MemoryHigh=48G
 
 [Install]
 WantedBy=multi-user.target
