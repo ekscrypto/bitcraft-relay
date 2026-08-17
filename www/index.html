@@ -18,6 +18,7 @@
     --code-bg: #0d1117;
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   body {
     margin: 0;
     padding: 32px 24px 64px;
@@ -30,7 +31,7 @@
   .wrap { max-width: 1080px; margin: 0 auto; }
   header h1 { font-size: 24px; margin: 0 0 6px; }
   header .lede { margin: 0 0 8px; color: var(--text); max-width: 76ch; }
-  header .disclaimer { color: var(--muted); font-size: 12px; margin: 0; }
+  header .disclaimer { color: var(--muted); font-size: 13px; margin: 0; }
   header .disclaimer a { color: var(--muted); text-decoration: underline; }
   .health-line {
     margin-top: 14px;
@@ -117,7 +118,7 @@
     border-radius: 4px;
     padding: 6px 9px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
+    font-size: 12.5px;
     color: var(--text);
     overflow-x: auto;
     white-space: nowrap;
@@ -142,7 +143,7 @@
     flex-wrap: wrap;
     margin: 4px 0 12px;
   }
-  .meta-row .left { color: var(--muted); font-size: 12px; }
+  .meta-row .left { color: var(--muted); font-size: 13px; }
   .meta-row .left b { color: var(--text); }
   button.refresh {
     background: #21262d;
@@ -170,7 +171,7 @@
   }
   .stat-label {
     color: var(--muted);
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
@@ -191,7 +192,7 @@
     padding-top: 16px;
     border-top: 1px solid var(--border);
     color: var(--muted);
-    font-size: 12px;
+    font-size: 13px;
     display: flex;
     justify-content: space-between;
     gap: 12px;
@@ -828,6 +829,15 @@
     } else if (conn === "disconnected") {
       cls = "bad"; label = "disconnected";
       pillTitle = "disconnected";
+    } else if (conn === "unreachable") {
+      // Coordinator-side verdict: the source's status endpoint itself
+      // stopped answering past the poll grace. Everything else in the
+      // row is the last-known snapshot (see last_success_unix).
+      cls = "bad"; label = "unreachable";
+      var age = (s.last_success_unix != null)
+        ? Math.max(0, Date.now() / 1000 - s.last_success_unix) : null;
+      pillTitle = "status endpoint unreachable" +
+        ((age != null) ? " — last ok " + formatDuration(age) + " ago" : "");
     } else {
       // No connectivity and no legacy metrics — assume down.
       var up = s.metrics && s.metrics.upstream;
