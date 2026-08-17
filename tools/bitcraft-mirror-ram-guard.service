@@ -1,0 +1,21 @@
+# RAM guard for bitcraft-mirror.service.
+#
+# Stops the one-process mirror when MemAvailable falls below 2 GiB so the
+# warm blue standby (during the cutover soak) and the rest of the host keep
+# headroom. Green binds ports blue never uses, so the only collision risk
+# during overlap is memory — this guard is that backstop.
+[Unit]
+Description=RAM guard for bitcraft-mirror (stop if MemAvailable < 2 GiB)
+After=network-online.target
+PartOf=bitcraft-mirror.service
+
+[Service]
+Type=simple
+ExecStart=/srv/relay/bitcraft-relay/tools/bitcraft-mirror-ram-guard.sh
+Environment="BITCRAFT_MIRROR_RAM_MIN_FREE_KB=2097152"
+Environment="BITCRAFT_MIRROR_RAM_GUARD_INTERVAL=2"
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

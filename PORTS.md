@@ -7,12 +7,15 @@ historical public port band so existing client tooling that keys off
 `3000 + regionID` still works — every public port proxies to the same
 backend; the database name selects the region.
 
-> **Future topology (2026-08, not deployed).** `spacetimedb-bitcraft-mirror`
-> runs one process mirroring all regions **with the read cache embedded**
-> (`--bitcraft-cache`, cache API still on `127.0.0.1:8089`) — same public
-> port band, same URLs, but `relay-cache.service` and the per-instance
-> `public-mirror@*.service` fleet collapse into that single process. Nothing
-> in this document changes for clients.
+> **Staged topology (2026-08).** `spacetimedb-bitcraft-mirror` runs one
+> process mirroring all regions **with the read cache embedded**
+> (`--bitcraft-cache`) — same public port band, same URLs, but
+> `relay-cache.service` and the per-instance `public-mirror@*.service` fleet
+> collapse into that single process. It listens on `127.0.0.1:3100`
+> (WS/HTTP), `127.0.0.1:3130` (status sidecar, main + 30), and serves the
+> cache API on `127.0.0.1:8090` until the cutover flips nginx
+> (`bitcraft-relay/tools/cutover-to-bitcraft-mirror.sh`, see DEPLOY.md §
+> "One-process bitcraft-mirror cutover"). Nothing changes for clients.
 
 ## Formula (public ports — unchanged for clients)
 
@@ -36,6 +39,9 @@ special case at offset 0.
 | Per-mirror readiness JSON (legacy, main server) | `GET http://127.0.0.1:3000/v1/mirrors` |
 | Fleet `/health` (coordinator) | `127.0.0.1:8082` → public `/health` |
 | `relay-cache` HTTP/WS | `127.0.0.1:8089` |
+| bitcraft-mirror WS/HTTP (staged green) | `127.0.0.1:3100` (`bitcraft-mirror.service`) |
+| bitcraft-mirror status sidecar (staged green) | `GET http://127.0.0.1:3130/v1/mirrors` |
+| bitcraft-mirror embedded cache (staged green) | `127.0.0.1:8090` (nginx flips `:8089` → `:8090` at cutover) |
 
 There is no per-region dashboard band (`3100+N`) and no per-region
 `relay` / spawned stdb process.
@@ -47,7 +53,8 @@ There is no per-region dashboard band (`3100+N`) and no per-region
 | Global + regional (public WSS/HTTP) | `3000–3025` | nginx TLS → `127.0.0.1:3000` |
 | Reserved (future public) | `3026–3049` | Widen nginx/UFW when needed |
 | **Trial** (regions 7–8 only) | `3030` loopback, status `3060`, public `3037–3038` | Isolated `public-mirror-trial.service`; see [`tools/public-mirror-trial-deploy.sh`](tools/public-mirror-trial-deploy.sh) |
-| ~~Dashboard~~ | ~~`3100–3149`~~ | Retired with the old relay fleet |
+| **bitcraft-mirror (staged green)** | `3100` WS, `3130` status, `8090` cache | One-process mirror + embedded cache; see [`tools/cutover-to-bitcraft-mirror.sh`](tools/cutover-to-bitcraft-mirror.sh) |
+| ~~Dashboard~~ | ~~`3100–3149`~~ | Retired with the old relay fleet (green reuses `3100`/`3130`) |
 
 ## Public URLs
 

@@ -1,0 +1,70 @@
+# One-process BitCraft mirror + embedded read cache (spacetimedb-bitcraft-mirror).
+#
+# Replaces the per-instance public-mirror@*.service fleet AND the standalone
+# relay-cache.service with a single process: 14 upstream mirrors, the read
+# cache fed in-process (--bitcraft-cache), one WS listen, one status sidecar.
+#
+# Loopback layout (see bitcraft-relay/PORTS.md):
+#   127.0.0.1:3100  WS/HTTP for clients   — nginx 3000–3025 proxies here after
+#                                            the cutover (proxy_pass :3100)
+#   127.0.0.1:3130  isolated /v1/mirrors  — main port + 30 (offset convention)
+#   127.0.0.1:8090  embedded cache API    — nginx cache paths proxy here
+#                                            (:8089 stays with blue relay-cache
+#                                            until decommission, so blue and
+#                                            green never collide)
+#
+# Validated locally 2026-08-16 (full fleet): all 14 databases live in 5m40s,
+# peak RSS 25.76 GiB, ~1.5 cores steady state, zero disconnects over 66 min.
+#
+# Upstream auth: same EnvironmentFile as the fleet (`RELAY_UPSTREAM_TOKEN=…`,
+# a token env the standalone resolves natively). JWT keys: the same spacetime
+# CLI keypair as the public-mirror units.
+[Unit]
+Description=spacetimedb-bitcraft-mirror (one-process mirror + embedded cache)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+EnvironmentFile=-/etc/relay/upstream.env
+ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/spacetimedb-standalone start \
+    --data-dir /var/lib/relay/bitcraft-mirror \
+    --listen-addr 127.0.0.1:3100 \
+    --mirror-status-listen-addr 127.0.0.1:3130 \
+    --jwt-key-dir /srv/relay/.config/spacetime \
+    --public-mirror-v1 \
+    --non-interactive \
+    --mirror-subscribe-concurrency 1 \
+    --bitcraft-cache \
+    --cache-bind 127.0.0.1:8090 \
+    --cache-mem-ceiling-bytes 51539607552 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-global \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-3 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-7 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-8 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-9 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-11 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-12 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-13 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-14 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-15 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-17 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-18 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-19 \
+    --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-23
+WorkingDirectory=/srv/relay/spacetimedb-bitcraft-mirror
+Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RUST_LOG=spacetimedb=info,public_mirror=info,relay_cache=info"
+Restart=on-failure
+RestartSec=5s
+# Full-fleet cold seed measured ~6 minutes; allow much longer on a loaded host.
+TimeoutStartSec=0
+TimeoutStopSec=60s
+# Soft ceiling — whole fleet + cache peaks ~26 GiB (local measurement).
+# The ram-guard unit watches MemAvailable as the hard backstop.
+MemoryHigh=32G
+
+[Install]
+WantedBy=multi-user.target

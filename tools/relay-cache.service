@@ -19,12 +19,12 @@ User=relay
 Group=relay
 # Schema host/db come from Environment / cutover drop-in — do not hardcode
 # CLI --schema-* here (clap CLI flags override env and break cutover).
-ExecStart=/srv/relay/bitcraft-relay/target/release/relay-cache \
+ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/relay-cache \
     --bind 127.0.0.1:8089 \
     --unit-dir /etc/systemd/system
 # Diagnosing a hung SubscribeApplied: append --debug to ExecStart (or set
 # RELAY_CACHE_DEBUG=1). Heartbeats every 5s while waiting on bulk load.
-WorkingDirectory=/srv/relay/bitcraft-relay
+WorkingDirectory=/srv/relay/spacetimedb-bitcraft-mirror
 Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 # Full public-mirror fleet (native ports): cutover drop-in sets
 # RELAY_CACHE_MIRRORS_URL to the comma-separated sidecar list and
