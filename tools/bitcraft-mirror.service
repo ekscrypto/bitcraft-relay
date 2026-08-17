@@ -57,6 +57,9 @@ ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/spacetimedb-stan
 WorkingDirectory=/srv/relay/spacetimedb-bitcraft-mirror
 Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="RUST_LOG=spacetimedb=info,public_mirror=info,relay_cache=info"
+# No rolling stdb.log in the data dir: journald already captures stdout, and
+# the file double-writes every line to the slow array (attempt #4 post-mortem).
+Environment="SPACETIMEDB_DISABLE_DISK_LOGGING=1"
 Restart=on-failure
 RestartSec=5s
 # Full-fleet cold seed measured ~6 minutes; allow much longer on a loaded host.
