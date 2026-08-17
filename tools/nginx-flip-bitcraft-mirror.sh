@@ -28,7 +28,7 @@ files=$(grep -rl \
     -e "proxy_pass http://127.0.0.1:${GREEN_CACHE_PORT}" \
     -e "proxy_pass http://127.0.0.1:${BLUE_CACHE_PORT}" \
     /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d \
-    2>/dev/null | sort -u || true)
+    2>/dev/null | grep -v '\.bak' | sort -u || true)
 if [ -z "$files" ]; then
     echo "nginx-flip: no nginx config with known proxy_pass lines found" >&2
     exit 1

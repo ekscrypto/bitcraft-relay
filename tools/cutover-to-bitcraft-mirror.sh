@@ -158,7 +158,7 @@ backup_bundle() {
         sudo cp -a /etc/systemd/system/relay-cache.service.d ${BUNDLE}/dropins/ 2>/dev/null || true; \
         sudo cp -a /etc/systemd/system/relay-coordinator.service.d ${BUNDLE}/dropins/ 2>/dev/null || true; \
         sudo sh -c 'nginx -T > ${BUNDLE}/nginx/nginx-full-T.conf 2>/dev/null || true'; \
-        sudo sh -c 'for f in \$(grep -rl \"proxy_pass http://127.0.0.1:\$server_port\" /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null); do \
+        sudo sh -c 'for f in \$(grep -rl \"proxy_pass http://127.0.0.1:\$server_port\" /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null | grep -v \"\\.bak\"); do \
             sudo cp \"\$f\" \"${BUNDLE}/nginx/\$(echo \"\$f\" | tr / _)\"; \
             echo \"\$f\" >> \"${BUNDLE}/nginx/paths.txt\"; \
         done'; \
