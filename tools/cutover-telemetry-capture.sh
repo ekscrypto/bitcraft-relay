@@ -32,21 +32,21 @@ pidfile_alive() {
 }
 
 sample_once() {
-    out="$1"
-    echo "=== $(date -u +%FT%TZ)" >>"$out"
-    grep '^cpu ' /proc/stat >>"$out"
-    cat /proc/loadavg >>"$out"
+    log="$1"  # full path to the log file
+    echo "=== $(date -u +%FT%TZ)" >>"$log"
+    grep '^cpu ' /proc/stat >>"$log"
+    cat /proc/loadavg >>"$log"
     awk '$3 ~ /^(sd[a-z]+|vd[a-z]+|nvme[0-9]+n[0-9]+)$/ { r += $6; w += $10 }
-         END { print "disk " r " " w }' /proc/diskstats >>"$out"
+         END { print "disk " r " " w }' /proc/diskstats >>"$log"
     pid=$(systemctl show -p MainPID --value "$UNIT" 2>/dev/null || echo 0)
     if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -r "/proc/$pid/stat" ]; then
-        awk -v p="$pid" '{ print "proc " p " " $14 " " $15 }' /proc/$pid/stat >>"$out"
+        awk -v p="$pid" '{ print "proc " p " " $14 " " $15 }' /proc/$pid/stat >>"$log"
         if [ -r "/proc/$pid/io" ]; then
             awk -v p="$pid" '/^read_bytes/ { r = $2 } /^write_bytes/ { w = $2 }
-                             END { print "procio " p " " r " " w }' /proc/$pid/io >>"$out"
+                             END { print "procio " p " " r " " w }' /proc/$pid/io >>"$log"
         fi
     else
-        echo "proc 0 0 0" >>"$out"
+        echo "proc 0 0 0" >>"$log"
     fi
 }
 
@@ -70,8 +70,9 @@ cmd_start() {
 
 cmd_sample_loop() {
     out="$1"; secs="$2"
+    log="$out/telemetry.log"
     while :; do
-        sample_once "$out" || true
+        sample_once "$log" || true
         sleep "$secs"
     done
 }
