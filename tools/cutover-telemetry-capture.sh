@@ -5,7 +5,11 @@
 #     2026-08-17 attempt-#2 post-mortem could not answer — its capture died),
 #   - whole-disk read/write sector counters (/proc/diskstats),
 #   - the green process's CPU jiffies and /proc/PID/io read/write bytes
-#     (pid re-resolved every sample, so service restarts are followed).
+#     (pid re-resolved every sample, so service restarts are followed),
+#   - **kernel stacks of D-state (uninterruptible-IO) threads**, while any
+#     exist — attempt #4's load 10–14 with runnable 1–3 was exactly this,
+#     and the stacks name the blocked syscall (inspect with
+#     `grep -A12 '^dstack' telemetry.log`; zero lines in steady state).
 #
 # Started best-effort by cutover-to-bitcraft-mirror.sh just before green
 # launches; safe to also start manually. Pidfile-guarded — deliberately no
@@ -48,6 +52,18 @@ sample_once() {
     else
         echo "proc 0 0 0" >>"$log"
     fi
+    # D-state thread stacks. ps (not /proc/*/stat awk) because comm can
+    # contain spaces; /proc/PID/task/TID/stack needs root (we run as root)
+    # with the always-readable wchan as corroboration/fallback.
+    ps -eLo stat=,pid=,tid=,comm= --no-headers 2>/dev/null \
+        | awk '$1 ~ /^D/ { $1 = ""; print }' \
+        | while read -r dpid dtid dcomm; do
+            echo "dstack $dpid $dtid $dcomm" >>"$log"
+            if [ -r "/proc/$dpid/task/$dtid/stack" ]; then
+                sed 's/^/  dstack-frame /' "/proc/$dpid/task/$dtid/stack" >>"$log"
+            fi
+            echo "  dstack-wchan $(cat /proc/$dpid/task/$dtid/wchan 2>/dev/null)" >>"$log"
+        done
 }
 
 cmd_start() {
