@@ -127,7 +127,7 @@ run_remote "sudo systemctl enable relay-cache.service 2>/dev/null || true; \
 
 echo "== 6/7: advisory waits (regions serve as they finish seeding) =="
 echo "-- per-region: bitcraft-live-global :3030, bitcraft-live-N :\$((3030+N))"
-run_remote "for db in \$(cat ${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances); do \
+run_remote "for db in \$(sed '/^[[:space:]]*#/d;/^[[:space:]]*\$/d' ${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances); do \
         case \$db in \
             bitcraft-live-global) p=3030 ;; \
             *) p=\$((3030 + \${db##*-})) ;; \
