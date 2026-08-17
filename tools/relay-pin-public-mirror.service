@@ -1,0 +1,21 @@
+# Pin the blue fleet's public-mirror binary + shared libs into RAM via
+# vmtouch mlock — all 14 public-mirror@*.service instances share this one
+# file, so one lock protects every instance restart / re-seed / rollback.
+# See relay-pin-pages.sh. Restart after each binary redeploy —
+# tools/deploy.sh mirror does this.
+[Unit]
+Description=Pin public-mirror (blue fleet) binary + libs in page cache (vmtouch mlock)
+After=local-fs.target
+
+[Service]
+Type=simple
+Environment=PIN_BINARY=/srv/relay/spacetimedb-public-mirror/target/release/spacetimedb-standalone
+ExecStart=/srv/relay/bitcraft-relay/tools/relay-pin-pages.sh
+LimitMEMLOCK=1G
+Nice=19
+IOSchedulingClass=idle
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

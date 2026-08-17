@@ -1,0 +1,23 @@
+# Pin the one-process bitcraft-mirror (green) binary + shared libs into RAM
+# via vmtouch mlock — see relay-pin-pages.sh and
+# spacetimedb-bitcraft-mirror/MULTI-MIRROR-UPSTREAM-RESETS.md (attempt #4:
+# lazy text-page faults starved behind HDD writeback drains).
+# Runs forever holding the lock; enabled at boot (WantedBy=multi-user.target).
+# Restart after each binary redeploy — tools/deploy.sh bitcraft does this.
+[Unit]
+Description=Pin bitcraft-mirror binary + libs in page cache (vmtouch mlock)
+After=local-fs.target
+Before=bitcraft-mirror.service
+
+[Service]
+Type=simple
+Environment=PIN_BINARY=/srv/relay/spacetimedb-bitcraft-mirror/target/release/spacetimedb-standalone
+ExecStart=/srv/relay/bitcraft-relay/tools/relay-pin-pages.sh
+LimitMEMLOCK=1G
+Nice=19
+IOSchedulingClass=idle
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

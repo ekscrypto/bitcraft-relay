@@ -104,9 +104,12 @@ else
     run_remote "sudo ${RELAY_BITCRAFT_DIR}/tools/nginx-flip-bitcraft-mirror.sh down"
 fi
 
-echo "== 3/7: stop + disable green =="
+echo "== 3/7: stop + disable green (page-pin units stay enabled — they protect re-seeds in both topologies) =="
 run_remote "sudo systemctl disable --now bitcraft-mirror.service bitcraft-mirror-ram-guard.service 2>/dev/null || true; \
-    systemctl is-active bitcraft-mirror.service 2>/dev/null || echo 'green stopped'"
+    systemctl is-active bitcraft-mirror.service 2>/dev/null || echo 'green stopped'; \
+    sudo systemctl enable --now relay-pin-public-mirror.service 2>/dev/null || \
+        echo 'WARN: relay-pin-public-mirror.service failed — blue re-seed will take disk page faults'; \
+    systemctl is-active relay-pin-public-mirror.service || true"
 
 echo "== 4/7: restore coordinator drop-in; restart (sequencer ON → blue instances start) =="
 if [ -n "$BACKUP_DIR" ]; then

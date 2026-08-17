@@ -183,14 +183,24 @@ backup_bundle() {
 }
 
 install_green_units() {
-    echo "== install green units (bitcraft-mirror.service + ram-guard) =="
+    echo "== install green units (bitcraft-mirror.service + ram-guard + page-pins) =="
+    # The page-pin units vmtouch-mlock the green and blue binaries + libs in
+    # RAM (attempt #4: text-page faults starve behind HDD writeback drains).
+    # Restarting the green pin here picks up a freshly built binary inode;
+    # the units stay enabled across reboots and across rollbacks — they
+    # protect instance restarts/re-seeds in BOTH topologies.
     run_remote "sudo cp ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror.service /etc/systemd/system/ && \
         sudo cp ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror-ram-guard.service /etc/systemd/system/ && \
+        sudo cp ${RELAY_BITCRAFT_DIR}/tools/relay-pin-bitcraft-mirror.service \
+            ${RELAY_BITCRAFT_DIR}/tools/relay-pin-public-mirror.service /etc/systemd/system/ && \
         sudo chmod +x ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror-ram-guard.sh \
             ${RELAY_BITCRAFT_DIR}/tools/nginx-flip-bitcraft-mirror.sh \
             ${RELAY_BITCRAFT_DIR}/tools/wait-mirrors-live.sh \
-            ${RELAY_BITCRAFT_DIR}/tools/wait-cache-ready.sh && \
+            ${RELAY_BITCRAFT_DIR}/tools/wait-cache-ready.sh \
+            ${RELAY_BITCRAFT_DIR}/tools/relay-pin-pages.sh && \
         sudo systemctl daemon-reload && \
+        sudo systemctl enable --now relay-pin-bitcraft-mirror.service relay-pin-public-mirror.service && \
+        sudo systemctl restart relay-pin-bitcraft-mirror.service && \
         systemctl is-enabled bitcraft-mirror.service 2>/dev/null || echo 'bitcraft-mirror.service installed (not enabled yet)'"
 }
 
@@ -267,7 +277,7 @@ echo "== 5/8: start green + wait for 14/14 live (timeout ${CUTOVER_WAIT_TIMEOUT}
 run_remote "sudo test -x ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh && \
     sudo ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh start || \
     echo 'telemetry capture not started (continuing)'"
-run_remote "sudo systemctl enable --now bitcraft-mirror.service bitcraft-mirror-ram-guard.service && sleep 5 && \
+run_remote "sudo systemctl enable --now relay-pin-bitcraft-mirror.service bitcraft-mirror.service bitcraft-mirror-ram-guard.service && sleep 5 && \
     systemctl is-active bitcraft-mirror.service"
 run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-mirrors-live.sh \
     http://127.0.0.1:${GREEN_STATUS_PORT}/v1/mirrors 14 ${CUTOVER_WAIT_TIMEOUT} 10" || {
