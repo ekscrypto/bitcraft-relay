@@ -84,7 +84,10 @@ GREEN_WS_PORT="${GREEN_WS_PORT:-3100}"
 GREEN_STATUS_PORT="${GREEN_STATUS_PORT:-3130}"
 GREEN_CACHE_PORT="${GREEN_CACHE_PORT:-8090}"
 BLUE_CACHE_PORT="${BLUE_CACHE_PORT:-8089}"
-CUTOVER_WAIT_TIMEOUT="${CUTOVER_WAIT_TIMEOUT:-3600}"
+# 7200s: seeding is fully serialized (one mirror at a time via the subscribe
+# gate, one table at a time via seed pacing) — see MULTI-MIRROR-UPSTREAM-
+# RESETS.md — so a cold start can take well over an hour on the 4-core host.
+CUTOVER_WAIT_TIMEOUT="${CUTOVER_WAIT_TIMEOUT:-7200}"
 CARGO_ARGS="${RELAY_CARGO_ARGS:--j4}"
 UPSTREAM_BASE="${UPSTREAM_BASE:-wss://bitcraft-early-access.spacetimedb.com}"
 
