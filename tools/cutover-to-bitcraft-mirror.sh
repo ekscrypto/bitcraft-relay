@@ -264,10 +264,18 @@ run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-mirro
     http://127.0.0.1:${GREEN_STATUS_PORT}/v1/mirrors 14 ${CUTOVER_WAIT_TIMEOUT} 10" || {
     echo
     echo "############################################################" >&2
-    echo "# green did NOT come up. Blue state: warm instances + relay-cache" >&2
-    echo "# still running, nginx still → blue. Cold-region WS is down." >&2
-    echo "# Inspect: ssh ${SSH_TARGET} 'journalctl -u bitcraft-mirror -n 50'" >&2
-    echo "# Then roll back: ${HERE}/rollback-from-bitcraft-mirror.sh --apply" >&2
+    echo "# green did NOT come up. nginx still points at blue." >&2
+    if [ -n "$warm_units" ]; then
+        echo "# Blue state: warm instances + relay-cache still running —" >&2
+        echo "# those regions and the cache API still serve. Cold-region WS is down." >&2
+    else
+        echo "# Blue state: ENTIRELY STOPPED — service is DOWN until green" >&2
+        echo "# comes up or rollback finishes re-seeding blue (~15–45 min," >&2
+        echo "# regions return progressively)." >&2
+    fi
+    echo "# Inspect: ssh ${SSH_TARGET} 'journalctl -u bitcraft-mirror.service -n 50'" >&2
+    echo "# Re-run this script (idempotent) to retry green, or roll back:" >&2
+    echo "#   ${HERE}/rollback-from-bitcraft-mirror.sh --apply" >&2
     echo "############################################################" >&2
     exit 1
 }
@@ -299,13 +307,17 @@ run_remote "curl -sf 'https://relay.bitcraftsync.app:3014/v1/database/bitcraft-l
 run_remote "curl -sf https://relay.bitcraftsync.app/health | head -c 200; echo"
 
 echo
-echo "Cutover complete. Green (one-process mirror + embedded cache) serves"
-echo "everything; blue warm standby + relay-cache idle for instant rollback."
+echo "Cutover complete. Green (one-process mirror + embedded cache) serves everything."
+if [ -n "$warm_units" ]; then
+    echo "Blue warm standby + relay-cache idle for instant rollback (decommission when satisfied)."
+    echo "  Decommission blue: ${HERE}/decommission-public-mirror-fleet.sh --apply"
+else
+    echo "Blue is fully stopped. relay-cache still runs (stale, unused) — stop it via:"
+    echo "  ${HERE}/decommission-public-mirror-fleet.sh --apply"
+fi
 echo
-echo "  Soak, then decommission blue:"
-echo "    ${HERE}/decommission-public-mirror-fleet.sh --apply"
-echo "  Roll back (fast while blue is warm):"
-echo "    ${HERE}/rollback-from-bitcraft-mirror.sh --apply --backup-dir ${BUNDLE}"
+echo "Roll back (re-seeds blue progressively, ~15–45 min):"
+echo "  ${HERE}/rollback-from-bitcraft-mirror.sh --apply --backup-dir ${BUNDLE}"
 if [ "$APPLY" -eq 0 ]; then
     echo
     echo "Dry-run complete. Re-run with --apply to execute."
