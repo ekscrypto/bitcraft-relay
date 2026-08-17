@@ -198,14 +198,51 @@ for key in order:
 PY
 }
 
+# Per-interval view: one row per consecutive cpu sample pair. Minute
+# averaging (cmd_summarize) hid the 2026-08-17 attempt-#3 iowait onset for
+# two analysis rounds — 91-95% spikes sat inside minutes that averaged out
+# to "3-13%". Rows with iowait >= 20% get a "<<<" marker so a stalled
+# storage window can be spotted by grep.
+cmd_summarize_intervals() {
+    out="${1:-$DEFAULT_OUT}"
+    python3 - "$out/telemetry.log" <<'PY'
+import sys
+from datetime import datetime, timezone
+
+prev_ts = None
+prev = None
+print("%-20s %6s %8s %s" % ("utc", "cpu%", "iowait%", ""))
+for line in open(sys.argv[1] if len(sys.argv) > 1 else "/tmp/cutover-telemetry/telemetry.log"):
+    line = line.strip()
+    if line.startswith("=== "):
+        ts = datetime.strptime(line[4:24], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        prev_ts = ts  # sample header; cpu line follows
+    elif line.startswith("cpu ") and prev_ts is not None:
+        vals = [int(x) for x in line.split()[1:]]
+        if prev is not None:
+            dv = [y - x for x, y in zip(prev, vals)]
+            # fields: user nice system idle iowait irq softirq steal guest guest_nice
+            nonidle = dv[0] + dv[1] + dv[2] + dv[5] + dv[6] + dv[7]
+            total = nonidle + dv[3] + dv[4]
+            if total > 0:
+                cpu = nonidle / total * 100
+                iow = dv[4] / total * 100
+                mark = "  <<<" if iow >= 20.0 else ""
+                print("%-20s %5.1f%% %7.1f%%%s" % (prev_ts.strftime("%H:%M:%S"), cpu, iow, mark))
+        prev = vals
+        prev_ts = None
+PY
+}
+
 case "${1:-}" in
     start) shift; cmd_start "$@" ;;
     stop) shift; cmd_stop "$@" ;;
     status) shift; cmd_status "$@" ;;
     summarize) shift; cmd_summarize "$@" ;;
+    summarize-intervals) shift; cmd_summarize_intervals "$@" ;;
     sample-loop) shift; cmd_sample_loop "$@" ;;  # internal; spawned by start
     *)
-        echo "usage: $0 start [OUTDIR]|stop [OUTDIR]|status [OUTDIR]|summarize [OUTDIR]" >&2
+        echo "usage: $0 start [OUTDIR]|stop [OUTDIR]|status [OUTDIR]|summarize [OUTDIR]|summarize-intervals [OUTDIR]" >&2
         exit 2
         ;;
 esac
