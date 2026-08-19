@@ -38,8 +38,9 @@ ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/spacetimedb-stan
     --non-interactive \
     --mirror-subscribe-concurrency 1 \
     --bitcraft-cache \
+    --roads-cache \
     --cache-bind 127.0.0.1:8090 \
-    --cache-mem-ceiling-bytes 51539607552 \
+    --cache-mem-ceiling-bytes 60129542144 \
     --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-global \
     --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-3 \
     --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-7 \
@@ -65,14 +66,14 @@ RestartSec=5s
 # Full-fleet cold seed measured ~6 minutes; allow much longer on a loaded host.
 TimeoutStartSec=0
 TimeoutStopSec=60s
-# Soft ceiling. Production steady state is ~35–37 GiB (2026-08-17, attempt #5);
-# the original 32G cap was set from the LOCAL soak (~26 GiB peak) and put green
-# permanently over memory.high in production — every charge was memcg-throttled
-# (154k+ throttle events, tokio workers D-stalled in mem_cgroup_handle_over_high,
-# dstack bursts ended 17:54:03, upstream RST'd r8 at 17:54:04). 48G leaves ~11 GiB
-# headroom over production state; the ram-guard unit (MemAvailable < 2 GiB) is the
-# hard backstop.
-MemoryHigh=48G
+# Soft ceiling. Production steady state is ~35–37 GiB without roads (2026-08-17,
+# attempt #5); --roads-cache adds ~4 GiB (~289 MiB/region × 14). The original
+# 32G cap was set from the LOCAL soak (~26 GiB peak) and put green permanently
+# over memory.high in production — every charge was memcg-throttled (154k+
+# throttle events, tokio workers D-stalled in mem_cgroup_handle_over_high).
+# Raised to 48G for the one-process cutover (attempt #5); 56G after roads.
+# The ram-guard unit (MemAvailable < 2 GiB) is the hard backstop.
+MemoryHigh=56G
 
 [Install]
 WantedBy=multi-user.target
