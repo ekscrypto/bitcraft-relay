@@ -17,7 +17,7 @@ Type=simple
 User=relay
 Group=relay
 EnvironmentFile=-/etc/relay/upstream.env
-ExecStart=/srv/relay/bitcraft-relay/tools/public-mirror-start.sh %i
+ExecStart=/srv/relay/bitcraft-relay/tools/archive/public-mirror-start.sh %i
 WorkingDirectory=/srv/relay/spacetimedb-public-mirror
 Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="RUST_LOG=spacetimedb=info,public_mirror=info"

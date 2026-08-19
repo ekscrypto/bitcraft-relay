@@ -9,7 +9,7 @@ PartOf=public-mirror-trial.service
 
 [Service]
 Type=simple
-ExecStart=/srv/relay/bitcraft-relay/tools/public-mirror-trial-ram-guard.sh
+ExecStart=/srv/relay/bitcraft-relay/tools/archive/public-mirror-trial-ram-guard.sh
 Environment="TRIAL_RAM_MIN_FREE_KB=1048576"
 Environment="TRIAL_RAM_GUARD_INTERVAL=2"
 Restart=always

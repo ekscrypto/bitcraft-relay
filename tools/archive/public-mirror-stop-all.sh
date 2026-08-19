@@ -6,7 +6,7 @@
 
 set -eu
 
-INSTANCES_FILE="${INSTANCES_FILE:-/srv/relay/bitcraft-relay/tools/public-mirror.instances}"
+INSTANCES_FILE="${INSTANCES_FILE:-/srv/relay/bitcraft-relay/tools/archive/public-mirror.instances}"
 
 if [ ! -f "$INSTANCES_FILE" ]; then
     echo "public-mirror-stop-all: missing $INSTANCES_FILE" >&2

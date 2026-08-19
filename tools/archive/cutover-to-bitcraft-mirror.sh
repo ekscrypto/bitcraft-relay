@@ -157,7 +157,7 @@ backup_bundle() {
         sudo cp /etc/systemd/system/public-mirror.service ${BUNDLE}/units/ 2>/dev/null || true; \
         sudo cp /etc/systemd/system/relay-cache.service ${BUNDLE}/units/; \
         sudo cp /etc/systemd/system/relay-coordinator.service ${BUNDLE}/units/; \
-        sudo cp ${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances ${BUNDLE}/units/; \
+        sudo cp ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror.instances ${BUNDLE}/units/; \
         sudo cp -a /etc/systemd/system/relay-cache.service.d ${BUNDLE}/dropins/ 2>/dev/null || true; \
         sudo cp -a /etc/systemd/system/relay-coordinator.service.d ${BUNDLE}/dropins/ 2>/dev/null || true; \
         sudo sh -c 'nginx -T > ${BUNDLE}/nginx/nginx-full-T.conf 2>/dev/null || true'; \
@@ -192,7 +192,7 @@ install_green_units() {
     run_remote "sudo cp ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror.service /etc/systemd/system/ && \
         sudo cp ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror-ram-guard.service /etc/systemd/system/ && \
         sudo cp ${RELAY_BITCRAFT_DIR}/tools/relay-pin-bitcraft-mirror.service \
-            ${RELAY_BITCRAFT_DIR}/tools/relay-pin-public-mirror.service /etc/systemd/system/ && \
+            ${RELAY_BITCRAFT_DIR}/tools/archive/relay-pin-public-mirror.service /etc/systemd/system/ && \
         sudo chmod +x ${RELAY_BITCRAFT_DIR}/tools/bitcraft-mirror-ram-guard.sh \
             ${RELAY_BITCRAFT_DIR}/tools/nginx-flip-bitcraft-mirror.sh \
             ${RELAY_BITCRAFT_DIR}/tools/wait-mirrors-live.sh \
@@ -274,8 +274,8 @@ echo "== 5/8: start green + wait for 14/14 live (timeout ${CUTOVER_WAIT_TIMEOUT}
 # Best-effort telemetry (CPU/iowait split, disk, green's own CPU+IO,
 # D-state thread stacks) so the attempt is diagnosable even if it rolls
 # back — see MULTI-MIRROR-UPSTREAM-RESETS.md. Never blocks the cutover.
-run_remote "sudo test -x ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh && \
-    sudo ${RELAY_BITCRAFT_DIR}/tools/cutover-telemetry-capture.sh start || \
+run_remote "sudo test -x ${RELAY_BITCRAFT_DIR}/tools/archive/cutover-telemetry-capture.sh && \
+    sudo ${RELAY_BITCRAFT_DIR}/tools/archive/cutover-telemetry-capture.sh start || \
     echo 'telemetry capture not started (continuing)'"
 run_remote "sudo systemctl enable --now relay-pin-bitcraft-mirror.service bitcraft-mirror.service bitcraft-mirror-ram-guard.service && sleep 5 && \
     systemctl is-active bitcraft-mirror.service"

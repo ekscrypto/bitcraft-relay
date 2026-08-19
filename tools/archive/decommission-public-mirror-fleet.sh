@@ -67,7 +67,7 @@ run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-cache
     http://127.0.0.1:${GREEN_CACHE_PORT}/cache-health 300 5"
 
 echo "== 2/5: stop all blue instances =="
-run_remote "sudo ${RELAY_BITCRAFT_DIR}/tools/public-mirror-stop-all.sh"
+run_remote "sudo ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-stop-all.sh"
 
 echo "== 3/5: disable + stop standalone relay-cache =="
 run_remote "sudo systemctl disable --now relay-cache.service && echo 'relay-cache stopped + disabled'"

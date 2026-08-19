@@ -120,9 +120,9 @@ run_local rsync -av --rsync-path='sudo rsync' \
     "$HERE/public-mirror-trial-ram-guard.sh" \
     "$HERE/public-mirror-trial-status.sh" \
     "${SSH_TARGET}:${RELAY_BITCRAFT_DIR}/tools/"
-run_remote "sudo cp ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial.service /etc/systemd/system/${UNIT} && \
-    sudo cp ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial-ram-guard.service /etc/systemd/system/${GUARD_UNIT} && \
-    sudo chmod +x ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial-ram-guard.sh ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial-status.sh && \
+run_remote "sudo cp ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial.service /etc/systemd/system/${UNIT} && \
+    sudo cp ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial-ram-guard.service /etc/systemd/system/${GUARD_UNIT} && \
+    sudo chmod +x ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial-ram-guard.sh ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial-status.sh && \
     sudo chown -R ${RELAY_SERVICE_USER}:${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools"
 run_remote "sudo mkdir -p /var/lib/relay/public-mirror-trial && sudo chown ${RELAY_SERVICE_USER}:${RELAY_SERVICE_USER} /var/lib/relay/public-mirror-trial"
 run_remote "sudo systemctl daemon-reload"
@@ -142,7 +142,7 @@ fi
 if [ "$NO_WAIT" -eq 1 ]; then
     echo "== trial: --no-wait set; services started, skipping /v1/mirrors poll =="
     echo "monitor: ssh ${SSH_TARGET} journalctl -u ${UNIT} -f"
-    echo "         ssh ${SSH_TARGET} ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial-status.sh -w"
+    echo "         ssh ${SSH_TARGET} ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial-status.sh -w"
     exit 0
 fi
 
@@ -196,7 +196,7 @@ raise SystemExit(1)
     if [ "$ok" -ne 1 ]; then
         echo "trial mirrors not all live after 3600s (services are running; seed may still be in progress)." >&2
         echo "monitor: ssh ${SSH_TARGET} journalctl -u ${UNIT} -f" >&2
-        echo "         ssh ${SSH_TARGET} ${RELAY_BITCRAFT_DIR}/tools/public-mirror-trial-status.sh -w" >&2
+        echo "         ssh ${SSH_TARGET} ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror-trial-status.sh -w" >&2
         exit 0
     fi
     ssh "$SSH_TARGET" "curl -s --max-time 60 ${MIRRORS_URL}" | python3 -m json.tool 2>/dev/null || true

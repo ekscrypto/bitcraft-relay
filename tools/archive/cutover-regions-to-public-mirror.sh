@@ -38,7 +38,7 @@ MIRROR_UPSTREAM=""
 MIRROR_STATUS_PORT_OFFSET=30
 SSH="${RELAY_SSH:-${RELAY_SSH_USER:-debian}@${RELAY_HOST:-relay.bitcraftsync.app}}"
 RELAY_BITCRAFT_DIR="${RELAY_BITCRAFT_DIR:-/srv/relay/bitcraft-relay}"
-INSTANCES_FILE="${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances"
+INSTANCES_FILE="${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror.instances"
 WAIT_TIMEOUT="${CUTOVER_WAIT_TIMEOUT:-3600}"
 
 while [ $# -gt 0 ]; do

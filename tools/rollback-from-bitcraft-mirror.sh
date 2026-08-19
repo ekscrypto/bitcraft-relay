@@ -108,6 +108,9 @@ echo "== 3/7: stop + disable green (page-pin units stay enabled — they protect
 run_remote "sudo systemctl disable --now bitcraft-mirror.service bitcraft-mirror-ram-guard.service 2>/dev/null || true; \
     systemctl is-active bitcraft-mirror.service 2>/dev/null || echo 'green stopped'; \
     sudo systemctl enable --now relay-pin-public-mirror.service 2>/dev/null || \
+        { sudo cp ${RELAY_BITCRAFT_DIR}/tools/archive/relay-pin-public-mirror.service /etc/systemd/system/ && \
+          sudo systemctl daemon-reload && \
+          sudo systemctl enable --now relay-pin-public-mirror.service; } 2>/dev/null || \
         echo 'WARN: relay-pin-public-mirror.service failed — blue re-seed will take disk page faults'; \
     systemctl is-active relay-pin-public-mirror.service || true"
 
@@ -130,14 +133,14 @@ run_remote "sudo systemctl enable relay-cache.service 2>/dev/null || true; \
 
 echo "== 6/7: advisory waits (regions serve as they finish seeding) =="
 echo "-- per-region: bitcraft-live-global :3030, bitcraft-live-N :\$((3030+N))"
-run_remote "for db in \$(sed '/^[[:space:]]*#/d;/^[[:space:]]*\$/d' ${RELAY_BITCRAFT_DIR}/tools/public-mirror.instances); do \
+run_remote "for db in \$(sed '/^[[:space:]]*#/d;/^[[:space:]]*\$/d' ${RELAY_BITCRAFT_DIR}/tools/archive/public-mirror.instances); do \
         case \$db in \
             bitcraft-live-global) p=3030 ;; \
             *) p=\$((3030 + \${db##*-})) ;; \
         esac; \
         echo \"-- waiting \$db on :\$p\"; \
         sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-mirrors-live.sh \
-            http://127.0.0.1:\$p/v1/mirrors 1 900 10 || echo \"WARN: \$db not live yet — sequencer may still be working; check fleet-status\"; \
+            http://127.0.0.1:\$p/v1/mirrors 1 900 10 || echo \"WARN: \$db not live yet — sequencer may still be working; check archive/fleet-status\"; \
     done" || true
 run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/wait-cache-ready.sh \
     http://127.0.0.1:8089/cache-health 600 5" || echo "WARN: blue cache not ready yet — it resyncs as regions come back"
@@ -146,12 +149,12 @@ echo "== 7/7: verify =="
 run_remote "curl -sf http://127.0.0.1:8089/cache-health | head -c 300; echo"
 run_remote "curl -sf https://relay.bitcraftsync.app/cache-health | head -c 200; echo"
 run_remote "curl -sf 'https://relay.bitcraftsync.app:3014/v1/database/bitcraft-live-14/schema?version=9' | head -c 120; echo"
-run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/fleet-status.sh | head -25 || true"
+run_remote "sudo -u ${RELAY_SERVICE_USER} ${RELAY_BITCRAFT_DIR}/tools/archive/fleet-status.sh | head -25 || true"
 
 echo
 echo "Rollback complete — blue (per-instance fleet + standalone cache) serves again."
 echo "Re-run the cutover any time (idempotent):"
-echo "  ${HERE}/cutover-to-bitcraft-mirror.sh --apply"
+echo "  ${HERE}/archive/cutover-to-bitcraft-mirror.sh --apply"
 if [ "$APPLY" -eq 0 ]; then
     echo
     echo "Dry-run complete. Re-run with --apply to execute."
