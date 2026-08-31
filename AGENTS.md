@@ -14,10 +14,8 @@ touching the repo.
 | `tools/archive/` | Retired blue/relay-fleet cutover scripts (reference only) |
 | `BITCRAFT.md`, `PORTS.md` | Upstream architecture + port scheme |
 
-Rust lives in siblings:
-
-- **`../spacetimedb-bitcraft-mirror/`** — mirror + embedded `relay-cache`
-- **`../spacetimedb-relay/`** — `relay-coordinator` + `relay-test-harness`
+Rust lives in sibling **`../spacetimedb-bitcraft-mirror/`** (mirror, embedded
+`relay-cache`, `mirror-health`, `relay-protocol`, `relay-test-harness`).
 
 ## Active `tools/` (production)
 
@@ -32,7 +30,7 @@ Rust lives in siblings:
 | `wait-mirrors-live.sh`, `wait-cache-ready.sh` | Readiness polling |
 | `rollback-from-bitcraft-mirror.sh` | Emergency revert to blue (rare) |
 | `relay-staleness-monitor.sh` | Ops monitoring |
-| `relay-coordinator.sudoers` | Coordinator permissions |
+| `mirror-health.service` | Fleet `/health` sidecar |
 
 Deploy from workspace root: [`../DEPLOY.md`](../DEPLOY.md),
 [`../tools/deploy.sh`](../tools/deploy.sh).
@@ -45,7 +43,8 @@ cargo build -p relay-cache --release   # standalone binary (rollback/dev)
 cargo build -p spacetimedb-standalone --release   # production
 ```
 
-Requires sibling `../spacetimedb-relay` for path deps.
+All relay Rust crates live in the same workspace (`relay-cache`, `mirror-health`,
+`relay-protocol`, `relay-test-harness`).
 
 ## Archived scripts
 

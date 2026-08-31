@@ -1,0 +1,27 @@
+# Fleet /health aggregator for bitcraft-mirror.
+#
+# Polls GET /v1/mirrors on the green status sidecar and serves aggregated
+# fleet JSON at /health (127.0.0.1:8082). nginx proxies the public listener
+# here; the dashboard HTML is served at GET /.
+[Unit]
+Description=bitcraft-mirror fleet /health aggregator
+After=network-online.target bitcraft-mirror.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/mirror-health \
+    --health-bind 127.0.0.1:8082 \
+    --mirrors-url http://127.0.0.1:3130/v1/mirrors \
+    --index-html /srv/relay/bitcraft-relay/www/index.html
+WorkingDirectory=/srv/relay/spacetimedb-bitcraft-mirror
+Environment="PATH=/srv/relay/.local/bin:/srv/relay/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RUST_LOG=mirror_health=info"
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target

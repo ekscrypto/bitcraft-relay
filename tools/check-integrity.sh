@@ -28,8 +28,8 @@
 #   HARNESS=./target/release/relay-test-harness ./tools/check-integrity.sh
 #   TIMEOUT=20 TABLE=admin_broadcast ./tools/check-integrity.sh
 #
-# The harness binary must be built first (sibling spacetimedb-relay):
-#   (cd ../spacetimedb-relay && cargo build -p relay-test-harness --release)
+# The harness binary must be built first (sibling spacetimedb-bitcraft-mirror):
+#   (cd ../spacetimedb-bitcraft-mirror && cargo build -p relay-test-harness --release)
 #
 # Exit codes:
 #   0  every live region passed all four checks
@@ -44,17 +44,17 @@ set -u
 HOST="${HOST:-relay.bitcraftsync.app}"
 TIMEOUT="${TIMEOUT:-30}"
 TABLE="${TABLE:-admin_broadcast}"
-# Resolve the harness binary: explicit override, then bitcraft-relay
-# target/, then sibling spacetimedb-relay target/ (split-sibling layout).
+# Resolve the harness binary: explicit override, then sibling
+# spacetimedb-bitcraft-mirror target/, then bitcraft-relay target/.
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-SIBLING_CORE=$(cd "$REPO/../spacetimedb-relay" 2>/dev/null && pwd || true)
+SIBLING_MIRROR=$(cd "$REPO/../spacetimedb-bitcraft-mirror" 2>/dev/null && pwd || true)
 if [ -z "${HARNESS:-}" ]; then
     for candidate in \
+        "${SIBLING_MIRROR:+$SIBLING_MIRROR/target/release/relay-test-harness}" \
+        "${SIBLING_MIRROR:+$SIBLING_MIRROR/target/debug/relay-test-harness}" \
         "$REPO/target/release/relay-test-harness" \
-        "$REPO/target/debug/relay-test-harness" \
-        "${SIBLING_CORE:+$SIBLING_CORE/target/release/relay-test-harness}" \
-        "${SIBLING_CORE:+$SIBLING_CORE/target/debug/relay-test-harness}"
+        "$REPO/target/debug/relay-test-harness"
     do
         [ -n "$candidate" ] || continue
         if [ -x "$candidate" ]; then
@@ -65,7 +65,7 @@ if [ -z "${HARNESS:-}" ]; then
 fi
 if [ -z "${HARNESS:-}" ] || [ ! -x "$HARNESS" ]; then
     echo "FAIL: relay-test-harness binary not found." >&2
-    echo "  Build it first: (cd ../spacetimedb-relay && cargo build -p relay-test-harness --release)" >&2
+    echo "  Build it first: (cd ../spacetimedb-bitcraft-mirror && cargo build -p relay-test-harness --release)" >&2
     echo "  or set HARNESS=/path/to/relay-test-harness" >&2
     exit 2
 fi
