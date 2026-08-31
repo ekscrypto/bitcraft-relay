@@ -25,6 +25,12 @@
       <a href="relay-cache.html">5. relay-cache joins</a>
       <a href="troubleshoot.html">6. If it fails</a>
     </nav>
+    <div class="nav-group">Roads cache</div>
+    <nav>
+      <a href="roads.html">Overview</a>
+      <a href="roads-region-map.html">Region map format</a>
+      <a href="roads-resources.html">Hex resources</a>
+    </nav>
   </aside>
 
   <main class="main">
@@ -33,7 +39,8 @@
       Step-by-step guide to connecting a SpacetimeDB client to the public
       BitCraft relays, subscribing to tables safely at BitCraft scale,
       reading the schema, extracting real player column values (name, XP,
-      skills), and using <code>relay-cache</code> HTTP joins.
+      skills), using <code>relay-cache</code> HTTP joins, and the
+      <code>/roads/*</code> terrain cache API (including hex resource lookup).
     </p>
 
     <div class="banner warn">
@@ -67,6 +74,18 @@
       <a href="relay-cache.html">
         <span class="num">05</span> How relay-cache joins tables
         <span class="desc">Endpoint map + query params, protobuf, <code>/cache-health</code>.</span>
+      </a>
+      <a href="roads.html">
+        <span class="num">R1</span> Roads terrain cache
+        <span class="desc">Protobuf <code>/roads/*</code> API — health, catalogs, region map, hex resources.</span>
+      </a>
+      <a href="roads-region-map.html">
+        <span class="num">R2</span> Region map format
+        <span class="desc">Grid layout, coordinates, terrain/overlay bit-packing, ETag caching.</span>
+      </a>
+      <a href="roads-resources.html">
+        <span class="num">R3</span> Hex resource lookup
+        <span class="desc">POST <code>/roads/region/&lt;id&gt;/resources</code> — harvestables on 1–16k tiles.</span>
       </a>
       <a href="troubleshoot.html">
         <span class="num">06</span> If it fails

@@ -25,6 +25,12 @@
       <a href="relay-cache.html">5. relay-cache joins</a>
       <a href="troubleshoot.html">6. If it fails</a>
     </nav>
+    <div class="nav-group">Roads cache</div>
+    <nav>
+      <a href="roads.html">Overview</a>
+      <a href="roads-region-map.html">Region map format</a>
+      <a href="roads-resources.html">Hex resources</a>
+    </nav>
   </aside>
 
   <main class="main">
@@ -293,7 +299,10 @@ curl -OJ https://relay.bitcraftsync.app/proto/relay_cache.proto</code></pre>
       Use <code>relay-cache</code> HTTP when you want claim/player/deposit
       views without re-implementing the joins — and when a shared in-memory
       cache on the relay host is acceptable (read-only, eventually consistent
-      with each region’s mirror). Stuck? See
+      with each region’s mirror). Hexite deposits are
+      <code>GET /deposits</code>; forestry/mining tiles for a road plan are
+      <a href="roads-resources.html"><code>POST /roads/region/&lt;id&gt;/resources</code></a>.
+      Stuck? See
       <a href="troubleshoot.html">If it fails</a>.
     </div>
 

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex resource lookup — roads tutorial</title>
+<link rel="stylesheet" href="css/tutorial.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">&larr; relay.bitcraftsync.app</a>
+    <h1>Tutorial</h1>
+    <div class="nav-group">Tools</div>
+    <nav>
+      <a href="/explorer/">Data explorer</a>
+    </nav>
+    <div class="nav-group">Guide</div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="connect.html">1. Connect</a>
+      <a href="subscribe.html">2. Subscribe</a>
+      <a href="schema.html">3. Discover schema</a>
+      <a href="players.html">4. Extract player data</a>
+      <a href="relay-cache.html">5. relay-cache joins</a>
+      <a href="troubleshoot.html">6. If it fails</a>
+    </nav>
+    <div class="nav-group">Roads cache</div>
+    <nav>
+      <a href="roads.html">Overview</a>
+      <a href="roads-region-map.html">Region map format</a>
+      <a href="roads-resources.html" class="active">Hex resources</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Hex resource lookup</h1>
+    <p class="lede">
+      <code>POST /roads/region/&lt;id&gt;/resources</code> returns allowlisted
+      harvestable nodes on a list of small-hex tiles in one region.
+      It is a <strong>point lookup</strong>, not a region dump: send the hexes
+      your planner already has (typically 1&ndash;16&thinsp;384), get back
+      sparse <code>ResourceNode</code>s. Schema:
+      <a href="/proto/roads_cache.proto">roads_cache.proto</a>.
+    </p>
+
+    <div class="banner warn">
+      <b>Do not subscribe <code>location_state</code> for this.</b>
+      Overworld <code>location_state</code> is ~10&ndash;14&nbsp;M rows per
+      busy region. Harvestables are also absent from
+      <code>GET /roads/region/&lt;id&gt;/map</code> (that snapshot is terrain
+      + paving/claim overlay only). This POST is the supported way to ask
+      &ldquo;what can I harvest on these tiles?&rdquo;
+    </div>
+
+    <h2>HTTP semantics</h2>
+    <p>
+      Protobuf on both sides. Send
+      <code>Content-Type: application/x-protobuf</code> and
+      <code>Accept: application/x-protobuf</code>. There is no JSON variant.
+    </p>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Status</th><th>When</th><th>Body</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>200 OK</code></td>
+            <td>Region ready; query accepted</td>
+            <td><code>ResourcesResponse</code> protobuf. Empty tiles simply
+              contribute no <code>nodes</code>.</td>
+          </tr>
+          <tr>
+            <td><code>202 Accepted</code></td>
+            <td>Region exists but roads grid still seeding</td>
+            <td>Empty. Poll <code>/roads/health</code> until
+              <code>state=READY</code> (3), then retry.</td>
+          </tr>
+          <tr>
+            <td><code>400 Bad Request</code></td>
+            <td>Body is not a <code>ResourceQuery</code>, or
+              <code>tiles.length &gt; 16384</code></td>
+            <td>Plain text
+              (<code>invalid ResourceQuery protobuf</code> or
+              <code>too many tiles (N &gt; 16384)</code>).
+              The cap is on the request list <em>before</em> de-duplication.</td>
+          </tr>
+          <tr>
+            <td><code>404 Not Found</code></td>
+            <td>Unknown region id</td>
+            <td>Plain text: <code>unknown region N</code></td>
+          </tr>
+          <tr>
+            <td><code>503 Service Unavailable</code></td>
+            <td>Roads cache disabled on host</td>
+            <td>Plain text: <code>roads cache not enabled</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Protobuf messages</h2>
+    <p>
+      From <code>roads_cache.proto</code> (package <code>roads_cache</code>):
+    </p>
+    <div class="code-panel active" data-lang="proto">
+<pre><code>message Hex {
+  int32 x = 1;
+  int32 z = 2;
+}
+
+message ResourceQuery {
+  repeated Hex tiles = 1;          // max 16384
+}
+
+message ResourceNode {
+  int32 x = 1;
+  int32 z = 2;
+  int32 resource_id = 3;           // resource_desc.id
+}
+
+message ResourcesResponse {
+  repeated ResourceNode nodes = 1; // sparse; omitted hexes had no match
+}</code></pre>
+    </div>
+    <ul>
+      <li>
+        <code>x</code> / <code>z</code> are <strong>world small-hex</strong>
+        coordinates &mdash; the same space as
+        <code>location_state.x/z</code> and the overlay grid in
+        <a href="roads-region-map.html">Region map format</a>
+        (not region-local <code>lx/lz</code>).
+      </li>
+      <li>
+        Duplicate hexes in <code>tiles</code> are ignored after the length
+        check (first occurrence wins).
+      </li>
+      <li>
+        Several nodes may share one hex; each is a separate
+        <code>ResourceNode</code> with the same <code>x</code>, <code>z</code>
+        and a different <code>resource_id</code>.
+      </li>
+      <li>
+        Hexes outside this region, or with no allowlisted node, produce
+        <em>no</em> row &mdash; not a sentinel.
+      </li>
+    </ul>
+
+    <h2>What is indexed</h2>
+    <p>
+      The relay joins <code>resource_state</code> to overworld
+      (<code>dimension = 1</code>) <code>location_state</code> at ingest and
+      keeps only an allowlist of <code>resource_id</code>s vendored from
+      BitCraft <code>Public/resource.json</code> tags:
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Included tags</th><th>Not included</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>
+              Tree, Sapling, Wood Logs, Stump, Ore Vein, Rock,
+              Rock Boulder, Rock Outcrop, Clay, Sand
+              (215 ids)
+            </td>
+            <td>
+              Fiber plants, flowers, grain, fish, salt, mushrooms,
+              berries, hexite (use <a href="relay-cache.html">GET /deposits</a>),
+              obstacles, footprints of a node on neighboring hexes
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Position is the entity&rsquo;s <code>location_state</code> tile only.
+      <code>resource_id</code> matches <code>resource_desc.id</code> (and
+      <code>resource.json</code> <code>id</code>). Resolve names/tiers from
+      that catalog on the client; this API does not return names.
+    </p>
+
+    <h2>Example (Python)</h2>
+    <p>
+      Generate stubs from
+      <a href="/proto/roads_cache.proto">/proto/roads_cache.proto</a>
+      (<code>protoc --python_out=.</code>), then:
+    </p>
+    <div class="code-panel active" data-lang="python">
+<pre><code>import requests
+from roads_cache_pb2 import ResourceQuery, ResourcesResponse
+
+REGION = 14
+# World small-hex, same space as location_state / overlay.
+# Region 14 origin is (23040, 15360); these two tiles sit on that origin.
+query = ResourceQuery()
+query.tiles.add(x=23040, z=15360)
+query.tiles.add(x=23041, z=15360)
+
+r = requests.post(
+    f"https://relay.bitcraftsync.app/roads/region/{REGION}/resources",
+    data=query.SerializeToString(),
+    headers={
+        "Content-Type": "application/x-protobuf",
+        "Accept": "application/x-protobuf",
+    },
+    timeout=30,
+)
+r.raise_for_status()
+if r.status_code == 202:
+    raise RuntimeError("region still seeding; retry after /roads/health READY")
+
+resp = ResourcesResponse()
+resp.ParseFromString(r.content)
+for n in resp.nodes:
+    print(n.x, n.z, n.resource_id)</code></pre>
+    </div>
+    <p>
+      With a pre-encoded body file:
+    </p>
+    <div class="code-panel active" data-lang="shell">
+<pre><code># query.pb is a serialized roads_cache.ResourceQuery
+curl -sS -H 'Content-Type: application/x-protobuf' \
+  -H 'Accept: application/x-protobuf' \
+  --data-binary @query.pb \
+  https://relay.bitcraftsync.app/roads/region/14/resources \
+  -o resources.pb -w '%{http_code}\n'
+# 200 → decode resources.pb as ResourcesResponse
+# 202 → empty body, region not ready
+# 400 → too many tiles or invalid protobuf</code></pre>
+    </div>
+
+    <h2>Client workflow</h2>
+    <ol class="steps">
+      <li>
+        Wait until <code>GET /roads/health</code> reports your region
+        <code>READY</code> (same gate as the map snapshot).
+      </li>
+      <li>
+        Collect the odd-r small-hex tiles on the planned path
+        (world <code>x</code>, <code>z</code>). Chunk requests at 16&thinsp;384.
+      </li>
+      <li>
+        <code>POST</code> one <code>ResourceQuery</code> per chunk to
+        <code>/roads/region/&lt;id&gt;/resources</code>.
+      </li>
+      <li>
+        Join <code>resource_id</code> against your local
+        <code>resource.json</code> / <code>resource_desc</code> catalog
+        for names and tags.
+      </li>
+    </ol>
+
+    <div class="diagram"><span class="hi">Your planner</span>
+    │  planned tiles (world small-hex x, z)  — max 16384 per POST
+    ▼
+<span class="ok">POST /roads/region/14/resources</span>
+    → ResourceQuery { tiles: [{x,z}, …] }
+    ← ResourcesResponse { nodes: [{x, z, resource_id}, …] }
+         sparse: empty hexes omitted; several nodes may share a hex</div>
+
+    <div class="next">
+      <a href="roads-region-map.html">← Region map format</a>
+      <a href="troubleshoot.html">Troubleshooting <span class="muted">/health, 502, subscribe stalls</span></a>
+    </div>
+  </main>
+</div>
+<script src="js/tutorial.js"></script>
+</body>
+</html>

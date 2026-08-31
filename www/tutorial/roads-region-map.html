@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Region map format — roads tutorial</title>
+<link rel="stylesheet" href="css/tutorial.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">&larr; relay.bitcraftsync.app</a>
+    <h1>Tutorial</h1>
+    <div class="nav-group">Tools</div>
+    <nav>
+      <a href="/explorer/">Data explorer</a>
+    </nav>
+    <div class="nav-group">Guide</div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="connect.html">1. Connect</a>
+      <a href="subscribe.html">2. Subscribe</a>
+      <a href="schema.html">3. Discover schema</a>
+      <a href="players.html">4. Extract player data</a>
+      <a href="relay-cache.html">5. relay-cache joins</a>
+      <a href="troubleshoot.html">6. If it fails</a>
+    </nav>
+    <div class="nav-group">Roads cache</div>
+    <nav>
+      <a href="roads.html">Overview</a>
+      <a href="roads-region-map.html" class="active">Region map format</a>
+      <a href="roads-resources.html">Hex resources</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Region map format</h1>
+    <p class="lede">
+      <code>GET /roads/region/&lt;id&gt;/map</code> returns a single
+      <code>roads_cache.RegionMapSnapshot</code> protobuf message. Terrain,
+      overlay, and <code>claim_table</code> are captured under one read lock
+      so claim indices in the overlay always resolve against the bundled table.
+      Schema: <a href="/proto/roads_cache.proto">roads_cache.proto</a>.
+    </p>
+
+    <h2>HTTP semantics</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Status</th><th>When</th><th>Body</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>200 OK</code></td>
+            <td>Region loaded and ready</td>
+            <td>Full <code>RegionMapSnapshot</code> protobuf (~280&nbsp;MiB).
+              Response includes <code>ETag</code> header (same value as
+              message field <code>etag</code>).</td>
+          </tr>
+          <tr>
+            <td><code>202 Accepted</code></td>
+            <td>Region exists but grid not ready yet</td>
+            <td>Empty. Poll again after checking
+              <code>/roads/health</code> for <code>state=READY</code>.</td>
+          </tr>
+          <tr>
+            <td><code>304 Not Modified</code></td>
+            <td>Client sent matching <code>If-None-Match</code></td>
+            <td>Empty. Snapshot unchanged since last fetch.</td>
+          </tr>
+          <tr>
+            <td><code>404 Not Found</code></td>
+            <td>Unknown region id</td>
+            <td>Plain text: <code>unknown region N</code></td>
+          </tr>
+          <tr>
+            <td><code>503 Service Unavailable</code></td>
+            <td>Roads cache disabled on host</td>
+            <td>Plain text: <code>roads cache not enabled</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Always send <code>Accept: application/x-protobuf</code>.
+      <code>Cache-Control: private</code> is set on responses.
+    </p>
+
+    <h2>Protobuf message fields</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>region</code></td>
+            <td><code>uint32</code></td>
+            <td>BitCraft region id (path segment).</td>
+          </tr>
+          <tr>
+            <td><code>generation</code></td>
+            <td><code>uint64</code></td>
+            <td>Monotonic snapshot counter; bumps on each applied update batch.</td>
+          </tr>
+          <tr>
+            <td><code>last_update_unix_ms</code></td>
+            <td><code>int64</code></td>
+            <td>Wall-clock ms of the last grid mutation.</td>
+          </tr>
+          <tr>
+            <td><code>origin_x</code>, <code>origin_z</code></td>
+            <td><code>int32</code></td>
+            <td>World small-hex origin of this region&rsquo;s overlay grid
+              (south-west corner). Same as
+              <code>RegionsResponse.regions[].origin_x/z</code>.</td>
+          </tr>
+          <tr>
+            <td><code>claim_table</code></td>
+            <td><code>repeated uint64</code> (packed)</td>
+            <td>Index &rarr; claim entity id lookup. See below.</td>
+          </tr>
+          <tr>
+            <td><code>neutral_claim_ids</code></td>
+            <td><code>repeated uint64</code> (packed)</td>
+            <td>Entity ids of claims marked neutral in upstream
+              <code>claim_state</code>.</td>
+          </tr>
+          <tr>
+            <td><code>terrain</code></td>
+            <td><code>bytes</code></td>
+            <td>Super-hex terrain grid, little-endian u64 array. See below.</td>
+          </tr>
+          <tr>
+            <td><code>overlay</code></td>
+            <td><code>bytes</code></td>
+            <td>Small-hex overlay grid, little-endian u32 array. See below.</td>
+          </tr>
+          <tr>
+            <td><code>etag</code></td>
+            <td><code>string</code></td>
+            <td>SHA-256 hex digest of <code>terrain || overlay ||
+              claim_table_le_bytes</code> (used for conditional GET).</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>World and region coordinates</h2>
+    <p>
+      BitCraft regions sit on a 5&times;5 grid. Constants (from the relay
+      implementation):
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Constant</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td><code>REGION_COUNT_SQRT</code></td><td>5</td></tr>
+          <tr><td><code>CHUNKS_PER_SIDE</code></td><td>80 chunks per region edge</td></tr>
+          <tr><td><code>DEFAULT_CHUNK_SIZE</code></td><td>96 small hexes per chunk</td></tr>
+          <tr><td><code>REGION_SIDE</code></td><td>7680 (= 80 &times; 96) small hexes per region edge</td></tr>
+          <tr><td><code>SUPER_SIDE</code></td><td>2560 (= 80 &times; 32) super hexes per region edge</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Region grid position from id (<code>id</code> is 1-based):
+    </p>
+    <div class="code-panel active" data-lang="pseudo">
+<pre><code>idx = region_id - 1
+rx  = idx mod 5
+rz  = idx div 5
+origin_x = rx * 7680
+origin_z = rz * 7680</code></pre>
+    </div>
+    <p>
+      Example: region&nbsp;14 &rarr; <code>rx=3</code>, <code>rz=2</code>,
+      origin <code>(23040, 15360)</code>.
+    </p>
+    <p>
+      Convert world small-hex coordinates to region-local overlay indices:
+    </p>
+    <div class="code-panel active" data-lang="pseudo">
+<pre><code>lx = world_x - origin_x    // 0 … 7679
+lz = world_z - origin_z    // 0 … 7679
+overlay_index = lz * 7680 + lx   // row-major, u32 cell</code></pre>
+    </div>
+
+    <h2>Terrain grid (<code>terrain</code> bytes)</h2>
+    <p>
+      <strong>Layout:</strong> <code>2560 &times; 2560</code> super hexes,
+      row-major (<code>super_z * SUPER_SIDE + super_x</code>), each cell a
+      little-endian <code>u64</code>. Total size: 52&nbsp;428&nbsp;800 bytes
+      (~52.4&nbsp;MiB).
+    </p>
+    <p>
+      <strong>Cell packing</strong> (bits in the u64, all little-endian on wire):
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Bits</th><th>Field</th><th>Type</th></tr></thead>
+        <tbody>
+          <tr><td>0&ndash;15</td><td>elevation</td><td><code>i16</code> stored as u16</td></tr>
+          <tr><td>16&ndash;31</td><td>original_elevation</td><td><code>i16</code> stored as u16</td></tr>
+          <tr><td>32&ndash;47</td><td>water_level</td><td><code>i16</code> stored as u16</td></tr>
+          <tr><td>48&ndash;55</td><td>water_body_type</td><td><code>u8</code></td></tr>
+          <tr><td>56&ndash;63</td><td>(unused)</td><td>zero</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="code-panel active" data-lang="pseudo">
+<pre><code>// Pack (matches relay pack_terrain):
+packed = (elev &amp; 0xFFFF)
+       | ((orig &amp; 0xFFFF) &lt;&lt; 16)
+       | ((water &amp; 0xFFFF) &lt;&lt; 32)
+       | ((wbt &amp; 0xFF) &lt;&lt; 48)
+
+// Unpack:
+elev  = int16(packed &amp; 0xFFFF)
+orig  = int16((packed &gt;&gt; 16) &amp; 0xFFFF)
+water = int16((packed &gt;&gt; 32) &amp; 0xFFFF)
+wbt   = uint8((packed &gt;&gt; 48) &amp; 0xFF)</code></pre>
+    </div>
+    <p>
+      Terrain is built from overworld-dimension
+      (<code>dimension = 1</code>) <code>terrain_chunk_state</code> rows.
+      Each chunk covers a 32&times;32 super-hex block inside the region grid.
+    </p>
+
+    <h2>Overlay grid (<code>overlay</code> bytes)</h2>
+    <p>
+      <strong>Layout:</strong> <code>7680 &times; 7680</code> small hexes,
+      row-major (<code>lz * REGION_SIDE + lx</code>), each cell a
+      little-endian <code>u32</code>. Total size: 235&nbsp;929&nbsp;600 bytes
+      (~225.9&nbsp;MiB).
+    </p>
+    <p>
+      <strong>Cell packing</strong> (facet-masked &mdash; paving and claim
+      index update independently):
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Bits</th><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>0&ndash;15</td><td><code>paving_type_id</code></td><td>0 = unpaved; otherwise id from <code>/roads/paving-types</code></td></tr>
+          <tr><td>16&ndash;31</td><td><code>claim_index</code></td><td>0 = no claim tile; otherwise index into <code>claim_table</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="code-panel active" data-lang="pseudo">
+<pre><code>paving_type_id = cell &amp; 0xFFFF
+claim_index    = (cell &gt;&gt; 16) &amp; 0xFFFF
+
+claim_entity_id = (claim_index == 0) ? 0 : claim_table[claim_index]</code></pre>
+    </div>
+    <p>
+      Overlay cells are populated from <code>paved_tile_state</code> and
+      <code>claim_tile_state</code>, joined through
+      <code>location_state</code> (world x/z) and
+      <code>claim_state</code> (neutral flag). Only tiles whose location
+      falls inside the region bounds appear in the grid.
+      Harvestable trees, ore, rocks, clay, and sand are <em>not</em> stored
+      in this overlay &mdash; look those up with
+      <a href="roads-resources.html"><code>POST /roads/region/&lt;id&gt;/resources</code></a>
+      using the same world small-hex <code>(x, z)</code>.
+    </p>
+
+    <h2><code>claim_table</code> and <code>neutral_claim_ids</code></h2>
+    <p>
+      The overlay stores compact <code>claim_index</code> values (16 bits)
+      instead of full 64-bit entity ids. The parallel
+      <code>claim_table</code> array resolves them:
+    </p>
+    <ul>
+      <li><code>claim_table[0] = 0</code> &mdash; sentinel (index 0 means &ldquo;none&rdquo;).</li>
+      <li><code>claim_table[i]</code> for <code>i &ge; 1</code> &mdash; claim entity id at that index.</li>
+      <li>Maximum 65535 distinct claims per region (16-bit index space).</li>
+    </ul>
+    <p>
+      <code>neutral_claim_ids</code> lists claim entity ids where upstream
+      <code>claim_state.neutral</code> is true. Use this to style or filter
+      neutral territory separately from player claims.
+    </p>
+
+    <div class="diagram">overlay cell (u32)
+  bits 0-15:  paving_type_id ──→ /roads/paving-types
+  bits 16-31: claim_index ─────→ claim_table[claim_index] → claim entity_id
+                                           │
+                                           └─ in neutral_claim_ids? → neutral claim</div>
+
+    <h2>Reading a world tile (Python sketch)</h2>
+    <div class="code-panel active" data-lang="python">
+<pre><code>import struct
+from roads_cache_pb2 import RegionMapSnapshot  # generated from roads_cache.proto
+
+snap = RegionMapSnapshot()
+snap.ParseFromString(open("region14.pb", "rb").read())
+
+REGION_SIDE = 7680
+SUPER_SIDE = 2560
+
+def overlay_at_world(x: int, z: int) -> tuple[int, int, int]:
+    """Return (paving_type_id, claim_index, claim_entity_id) at world small-hex (x, z)."""
+    lx = x - snap.origin_x
+    lz = z - snap.origin_z
+    if not (0 &lt;= lx &lt; REGION_SIDE and 0 &lt;= lz &lt; REGION_SIDE):
+        raise ValueError("out of region bounds")
+    idx = (lz * REGION_SIDE + lx) * 4
+    cell, = struct.unpack_from("&lt;I", snap.overlay, idx)
+    paving = cell &amp; 0xFFFF
+    claim_idx = (cell &gt;&gt; 16) &amp; 0xFFFF
+    claim_id = 0 if claim_idx == 0 else snap.claim_table[claim_idx]
+    return paving, claim_idx, claim_id
+
+def terrain_at_super(super_x: int, super_z: int) -> tuple[int, int, int, int]:
+    """Return (elev, orig, water, wbt) at region-local super-hex."""
+    if not (0 &lt;= super_x &lt; SUPER_SIDE and 0 &lt;= super_z &lt; SUPER_SIDE):
+        raise ValueError("out of terrain bounds")
+    idx = (super_z * SUPER_SIDE + super_x) * 8
+    packed, = struct.unpack_from("&lt;Q", snap.terrain, idx)
+    elev = struct.unpack("&lt;h", struct.pack("&lt;H", packed &amp; 0xFFFF))[0]
+    orig = struct.unpack("&lt;h", struct.pack("&lt;H", (packed &gt;&gt; 16) &amp; 0xFFFF))[0]
+    water = struct.unpack("&lt;h", struct.pack("&lt;H", (packed &gt;&gt; 32) &amp; 0xFFFF))[0]
+    wbt = (packed &gt;&gt; 48) &amp; 0xFF
+    return elev, orig, water, wbt</code></pre>
+    </div>
+
+    <h2>Conditional refresh with ETag</h2>
+    <p>
+      The server computes <code>etag</code> as SHA-256 hex over the raw
+      <code>terrain</code> bytes, then <code>overlay</code> bytes, then each
+      <code>claim_table</code> entry as little-endian u64. The same value is
+      returned in the HTTP <code>ETag</code> response header.
+    </p>
+    <div class="code-panel active" data-lang="shell">
+<pre><code># First fetch — save body + ETag
+curl -sH 'Accept: application/x-protobuf' -D headers.txt \
+  https://relay.bitcraftsync.app/roads/region/14/map -o region14.pb
+ETAG=$(grep -i '^etag:' headers.txt | awk '{print $2}' | tr -d '\r')
+
+# Later — skip download if unchanged
+curl -sH 'Accept: application/x-protobuf' -H "If-None-Match: $ETAG" \
+  -D headers2.txt -o /dev/null -w '%{http_code}\n' \
+  https://relay.bitcraftsync.app/roads/region/14/map
+# 304 → use cached region14.pb
+# 200 → new body written, update local copy + ETag</code></pre>
+    </div>
+
+    <h2>Size and memory expectations</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Component</th><th>Dimensions</th><th>Raw size</th></tr></thead>
+        <tbody>
+          <tr><td><code>terrain</code></td><td>2560&times;2560 &times; u64 LE</td><td>~52.4 MiB</td></tr>
+          <tr><td><code>overlay</code></td><td>7680&times;7680 &times; u32 LE</td><td>~225.9 MiB</td></tr>
+          <tr><td><code>claim_table</code></td><td>variable (packed u64)</td><td>typically &lt; 1 MiB</td></tr>
+          <tr><td><strong>Total snapshot</strong></td><td>protobuf-encoded</td><td><strong>~280 MiB</strong> per region</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      On the relay host each live region holds one in-memory copy (~289&nbsp;MiB
+      steady state). Plan client storage and bandwidth accordingly; prefer
+      ETag polling over full re-downloads.
+    </p>
+
+    <div class="next">
+      <a href="roads.html">← Roads overview</a>
+      <a href="roads-resources.html">Next: Hex resources <span class="muted">POST /roads/region/id/resources</span></a>
+    </div>
+  </main>
+</div>
+<script src="js/tutorial.js"></script>
+</body>
+</html>
