@@ -420,12 +420,16 @@
             Cache readiness (<code>relay-cache</code>): top-level
             <code>ready</code> and per-region <code>ready</code> flags.
             Protobuf schema list and raw <code>.proto</code> download for
-            the cache DTOs. Operational internals (memory pressure,
-            stream counters, row counts) are on loopback-only
-            <code>127.0.0.1:8089/internal/stats</code>.
+            the cache DTOs (<code>relay_cache.proto</code>,
+            <code>roads_cache.proto</code>, <code>roads.proto</code>).
+            Operational internals (memory pressure, stream counters, row
+            counts) are on loopback-only
+            <code>127.0.0.1:8090/internal/stats</code>.
             <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/cache-health</div>
             <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app/proto</div>
             <div class="curl"><span class="prompt">$</span> curl -OJ https://relay.bitcraftsync.app/proto/relay_cache.proto</div>
+            <div class="curl"><span class="prompt">$</span> curl -OJ https://relay.bitcraftsync.app/proto/roads_cache.proto</div>
+            <div class="curl"><span class="prompt">$</span> curl -OJ https://relay.bitcraftsync.app/proto/roads.proto</div>
           </td>
           <td>&mdash;</td>
         </tr>
@@ -531,6 +535,110 @@
     </table>
   </div>
 
+  <!-- Section 5: Roads terrain cache -->
+  <h2>Roads terrain cache</h2>
+  <p class="section-note">
+    Protobuf-only read API (<code>Accept: application/x-protobuf</code>;
+    schemas at <a class="ep" href="/proto" target="_blank" rel="noopener">/proto</a>).
+    In-memory terrain, paving overlay, claim index, and harvestable hex lookup per region.
+    Full format documentation:
+    <a href="/tutorial/roads.html">Roads cache tutorial</a>,
+    <a href="/tutorial/roads-region-map.html">Region map format</a>,
+    and
+    <a href="/tutorial/roads-resources.html">Hex resource lookup</a>.
+  </p>
+  <div class="panel">
+    <table class="endpoints">
+      <thead>
+        <tr>
+          <th>Endpoint</th>
+          <th>Returns</th>
+          <th>Query params</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a class="ep" href="/roads/health" target="_blank" rel="noopener">/roads/health</a></td>
+          <td>
+            Fleet readiness (<code>roads_cache.RoadsCacheHealth</code>):
+            top-level <code>ready</code>, <code>regions_ready</code> /
+            <code>regions_total</code>, <code>total_memory_bytes</code>, and
+            per-region <code>state</code> (idle / loading / ready / error),
+            connection status, tile counts, and memory.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Accept: application/x-protobuf' https://relay.bitcraftsync.app/roads/health</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><a class="ep" href="/roads/regions" target="_blank" rel="noopener">/roads/regions</a></td>
+          <td>
+            Live region catalog (<code>bitcraft.roads.RegionsResponse</code>):
+            each region&rsquo;s <code>id</code>, <code>name</code>,
+            <code>live</code> flag, grid coords (<code>rx</code>,
+            <code>rz</code>), world origin (<code>origin_x</code>,
+            <code>origin_z</code>), plus global
+            <code>region_width_chunks</code> /
+            <code>region_height_chunks</code>.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Accept: application/x-protobuf' https://relay.bitcraftsync.app/roads/regions</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><a class="ep" href="/roads/paving-types" target="_blank" rel="noopener">/roads/paving-types</a></td>
+          <td>
+            Global paving catalog (<code>bitcraft.roads.PavingTypesResponse</code>):
+            <code>tile_type_id</code>, name, duration, tier, input cargo,
+            and consumed material stacks per paving type.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Accept: application/x-protobuf' https://relay.bitcraftsync.app/roads/paving-types</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><a class="ep" href="/roads/terraform-recipes" target="_blank" rel="noopener">/roads/terraform-recipes</a></td>
+          <td>
+            Global terraform recipe table
+            (<code>bitcraft.roads.TerraformRecipesResponse</code>):
+            height <code>difference</code>, action count, stamina and time
+            per action.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Accept: application/x-protobuf' https://relay.bitcraftsync.app/roads/terraform-recipes</div>
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><span class="ep">/roads/region/&lt;id&gt;/map</span></td>
+          <td>
+            Atomic full-region snapshot
+            (<code>roads_cache.RegionMapSnapshot</code>) &mdash; terrain,
+            paving/claim overlay, and claim index table in one protobuf
+            (~280&nbsp;MiB). Supports <code>ETag</code> /
+            <code>If-None-Match</code>; returns <code>202</code> while
+            loading. See the
+            <a href="/tutorial/roads-region-map.html">region map format tutorial</a>
+            for grid layout, coordinates, and cell bit-packing.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Accept: application/x-protobuf' -D - -o /tmp/region14.pb https://relay.bitcraftsync.app/roads/region/14/map</div>
+          </td>
+          <td><code>id</code> (BitCraft region number, path segment)</td>
+        </tr>
+        <tr>
+          <td><span class="ep">POST /roads/region/&lt;id&gt;/resources</span></td>
+          <td>
+            Point lookup of allowlisted harvestables
+            (<code>roads_cache.ResourcesResponse</code>) on a list of world
+            small-hex tiles. Body:
+            <code>ResourceQuery { repeated Hex tiles }</code>, max
+            16&thinsp;384. Returns sparse
+            <code>ResourceNode { x, z, resource_id }</code> (forestry, mining,
+            clay, sand; overworld only). <code>202</code> while seeding;
+            <code>400</code> if oversize or invalid protobuf. See the
+            <a href="/tutorial/roads-resources.html">hex resource lookup tutorial</a>.
+            <div class="curl"><span class="prompt">$</span> curl -H 'Content-Type: application/x-protobuf' -H 'Accept: application/x-protobuf' --data-binary @query.pb https://relay.bitcraftsync.app/roads/region/14/resources</div>
+          </td>
+          <td><code>id</code> (path); protobuf body, not query params</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- The public multiplexed /inventory/ws and per-entity /ws routes were
        removed; relay-cache now serves HTTP read APIs plus a public
        /internal/dim-buildings/ws (housing-interior building ids for
@@ -538,7 +646,7 @@
 
   <footer>
     <span>
-      <a href="https://github.com/ekscrypto/spacetimedb-relay" target="_blank" rel="noopener">GitHub &middot; ekscrypto/spacetimedb-relay</a>
+      <a href="https://github.com/ekscrypto/spacetimedb-bitcraft-mirror" target="_blank" rel="noopener">GitHub &middot; ekscrypto/spacetimedb-bitcraft-mirror</a>
       &middot;
       <a href="https://ko-fi.com/ekscrypto" target="_blank" rel="noopener">Donate</a>
       &middot; community project, MIT licensed.

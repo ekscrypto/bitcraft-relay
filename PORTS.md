@@ -33,7 +33,7 @@ Production (green, `bitcraft-mirror.service`):
 | Mirror HTTP + WS (loopback) | `127.0.0.1:3100` (`bitcraft-mirror.service`) |
 | Mirror readiness JSON (isolated sidecar) | `GET http://127.0.0.1:3130/v1/mirrors` (main `:3100`, offset **+30**) |
 | Embedded cache HTTP/WS incl. loopback `/internal/stats` | `127.0.0.1:8090` |
-| Fleet `/health` (coordinator) | `127.0.0.1:8082` → public `/health` (fed by `:3130/v1/mirrors` since the cutover) |
+| Fleet `/health` (mirror-health) | `127.0.0.1:8082` → public `/health` (fed by `:3130/v1/mirrors` since the cutover) |
 
 Blue, rollback-only — re-seeded progressively (~15–45 min) by
 `rollback-from-bitcraft-mirror.sh`; stopped + disabled 2026-08-17:
@@ -88,6 +88,6 @@ Subprotocol: `v1.bsatn.spacetimedb` (provenance-preserving) or
   `/internal/stats` — the loopback diagnostics live at
   `curl http://127.0.0.1:8090/internal/stats`. The standalone
   `relay-cache` (`:8089`) is retired with blue and kept for rollback only.
-- `relay-coordinator` serves fleet `/health` on loopback `:8082`
-  (proxied publicly as `/health`), aggregating `GET /v1/mirrors` plus
-  host CPU/RAM/NIC samples.
+- `mirror-health.service` serves fleet `/health` on loopback `:8082`
+  (proxied publicly as `/health`), polling the standalone's `:3130`
+  `GET /v1/mirrors` plus host CPU/RAM/NIC samples.

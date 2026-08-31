@@ -170,17 +170,21 @@ scripts checked into git. Rotate via Clockwork Labs if it leaks.
 After discovery (example uses today’s advertised host for region 14):
 
 ```sh
-RELAY_UPSTREAM_TOKEN=$(grep -E '^eyJ' .developer-token | head -1) \
-  cargo run -p relay --manifest-path ../spacetimedb-relay/Cargo.toml -- \
-  --upstream wss://bitcraft-early-access.spacetimedb.com \
-  --database bitcraft-live-14 \
-  --upstream-protocol v1 \
+../spacetimedb-bitcraft-mirror/target/release/spacetimedb-standalone start \
+  --data-dir /tmp/bitcraft-mirror-data \
+  --listen-addr 127.0.0.1:3000 \
+  --jwt-pub-key-path /path/to/id_ecdsa.pub \
+  --jwt-priv-key-path /path/to/id_ecdsa \
+  --public-mirror-v1 \
+  --mirror-token-file /path/to/.developer-token \
+  --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-14 \
   ...
 ```
 
 Prefer the `host` / `module` from `region_connection_info` over a
-hard-coded upstream. (`relay` lives in the sibling
-[`spacetimedb-relay`](https://github.com/ekscrypto/spacetimedb-relay)
-workspace.) Region modules expose hundreds of public-user tables; first
-connect / mirror publish is heavy regardless of any subscribe-table
-filter (the filter only limits which tables are ingested).
+hard-coded upstream. (`spacetimedb-standalone` lives in the sibling
+[`spacetimedb-bitcraft-mirror`](https://github.com/ekscrypto/spacetimedb-bitcraft-mirror)
+fork; see its `BITCRAFT-FORK.md` quick start.) Region modules expose
+hundreds of public-user tables; first connect / mirror publish is heavy
+regardless of any subscribe-table filter (the filter only limits which
+tables are ingested).
