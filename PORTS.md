@@ -69,8 +69,21 @@ https://relay.bitcraftsync.app:<port>/v1/database/<database>/schema?version=9
 database (nginx fans all ports to the single mirror listen). Prefer
 `3000 + regionID` for clarity.
 
-Subprotocol: `v1.bsatn.spacetimedb` (provenance-preserving) or
-`v2.bsatn.spacetimedb` (row updates; mutations still rejected).
+Subprotocol (offered in `Sec-WebSocket-Protocol`; the relay prefers v2
+when several are offered): `v2.bsatn.spacetimedb` is the default —
+required for the mirrored event tables (`market_trade_event`,
+`craft_event`, …; insert-only `EventTable` frames, no snapshot/catch-up;
+unsupported on v1 — rejected on `v1.bsatn`, empty snapshot on
+`v1.json`). `v1.bsatn.spacetimedb` /
+`v1.json.spacetimedb` still serve every state table and carry
+per-transaction caller identity + timestamp (v2 frames carry rows only).
+Mutations (`CallReducer`/`CallProcedure`) are rejected on all protocols.
+
+nginx: the WS band proxies with plain `Upgrade`/`Connection` headers and
+never touches `Sec-WebSocket-Protocol`, so v1/v2 negotiation passes
+end-to-end — no per-protocol config. `tools/check-integrity.sh` re-proves
+all four client paths (v2/v1.bsatn/v1.json/schema) through the public
+band after every deploy.
 
 ## Public exposure
 

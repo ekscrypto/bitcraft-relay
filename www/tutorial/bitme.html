@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bit-Me app API &amp; BMR1/BME1 maps — tutorial</title>
+<link rel="stylesheet" href="css/tutorial.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">&larr; relay.bitcraftsync.app</a>
+    <h1>Tutorial</h1>
+    <div class="nav-group">Tools</div>
+    <nav>
+      <a href="/explorer/">Data explorer</a>
+    </nav>
+    <div class="nav-group">Guide</div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="connect.html">1. Connect</a>
+      <a href="subscribe.html">2. Subscribe</a>
+      <a href="schema.html">3. Discover schema</a>
+      <a href="players.html">4. Extract player data</a>
+      <a href="relay-cache.html">5. relay-cache joins</a>
+      <a href="troubleshoot.html">6. If it fails</a>
+    </nav>
+    <div class="nav-group">Roads cache</div>
+    <nav>
+      <a href="roads.html">Overview</a>
+      <a href="roads-region-map.html">Region map format</a>
+      <a href="roads-resources.html">Hex resources</a>
+    </nav>
+    <div class="nav-group">Bit-Me app</div>
+    <nav>
+      <a href="bitme.html" class="active">App API &amp; BMR1/BME1 maps</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Bit-Me app API &amp; the BMR1 / BME1 maps</h1>
+    <p class="lede">
+      The <code>/bitme/*</code> endpoints are a plain-JSON polling API built
+      for the Bit-Me mobile companion app — no SpacetimeDB
+      protocol, no authentication. Six GETs — plus one optional WebSocket,
+      the live resource <strong>change stream</strong> — cover the whole app:
+      name resolution, a ~1&nbsp;Hz activity snapshot, a packed binary
+      resource map centered on the player (the <strong>BMR1</strong>
+      format, documented below), the same window anchored at arbitrary
+      world coordinates, a matching elevation plane (the
+      <strong>BME1</strong> format), and the per-region dictionary needed
+      to decode BMR1.
+    </p>
+
+    <div class="banner warn">
+      <b>Polling is the session.</b> A <code>GET /bitme/session/&lt;id&gt;</code>
+      (or the resources window) <em>is</em> the session registration. Stop
+      polling for &gt;15 minutes and the server drops its tracking
+      (target health, spawn watch); the next poll transparently
+      re-registers. Design for ~1&nbsp;Hz while a screen is open.
+      (The world-anchored windows have no player, so they refresh
+      nothing. The change stream's 5&nbsp;s heartbeats also refresh the
+      session TTL, exactly like a poll.)
+    </div>
+
+    <h2>The seven endpoints</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Endpoint</th><th>Returns</th><th>Cadence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">GET /bitme/resolve?name=</td>
+            <td>Exact-match (case-insensitive) player name &rarr;
+              <code>entity_id</code>, <code>identity</code>, home region
+              (name, host, module), live <code>signed_in</code>. Covers all
+              25 regions. This is a lookup, not a search — use
+              <code>GET /player?name=</code> for substring search.</td>
+            <td>Once at onboarding</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/session/&lt;entity_id&gt;</td>
+            <td>One snapshot for the activity screens: position, current
+              claim, stamina, live buffs, action lifecycle, action-target
+              health, watched spawns (citric detection).</td>
+            <td>~1 Hz while open</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/session/&lt;entity_id&gt;/resources</td>
+            <td>Packed 400&times;400 map centered on the player — binary BMR1
+              (<code>application/octet-stream</code>, 320,024 bytes),
+              <strong>not</strong> JSON. A merged view: every resource type
+              in the region, plus player paving and a water layer.</td>
+            <td>Only while the map screen is open</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/session/&lt;entity_id&gt;/resources/ws</td>
+            <td>The one WebSocket: a live change stream over the same
+              400&times;400 window. After a <code>subscribed</code> ack,
+              every in-window resource/paving tile change arrives as a
+              small binary <strong>BMD1</strong> delta frame; the server
+              follows the player's anchor server-side. Read-only; the
+              client keeps convergence by re-fetching the BMR1 window
+              (details below).</td>
+            <td>One per player, while the map screen is open</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/world/&lt;x&gt;/&lt;z&gt;/resources</td>
+            <td>The same BMR1 window anchored at explicit world tile
+              coordinates — the region is derived from the coordinates, so
+              the map can pan anywhere without following a player. No
+              player involved, so no session keep-alive.</td>
+            <td>Map panning / arbitrary views</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/world/&lt;x&gt;/&lt;z&gt;/elevation</td>
+            <td>Packed super-hex terrain plane covering the same
+              400&times;400 footprint — binary BME1, 134&ndash;137 &times;
+              136 super-hexes (145,818&ndash;149,082 bytes; the odd-r shear
+              makes the width vary with the window's row alignment):
+              current and original (pre-terraform) elevation, water level,
+              and water body type per super-hex.</td>
+            <td>With the map; refetch when <code>generation</code> changes</td>
+          </tr>
+          <tr>
+            <td class="mono">GET /bitme/region/&lt;region&gt;/resource-dictionary</td>
+            <td>Tile-word index &rarr; <code>resource_id</code> + name +
+              gamedata + <code>harvestable</code> flag, for expanding BMR1
+              payloads client-side.</td>
+            <td>Once per region; refetch when <code>dict_version</code> changes</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Conventions</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Convention</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Entity ids</td>
+            <td><strong>JSON strings</strong> — upstream ids are u64 and
+              exceed JS <code>Number.MAX_SAFE_INTEGER</code>. Never parse
+              them as numbers.</td>
+          </tr>
+          <tr>
+            <td>Positions</td>
+            <td><code>world_x</code>/<code>world_z</code> are float world
+              units (one tile = 1.0); <code>tile_x</code>/<code>tile_z</code>
+              are integer odd-r tiles — the same coordinate space as the
+              <a href="roads-region-map.html">/roads</a> endpoints.</td>
+          </tr>
+          <tr>
+            <td>Clocks</td>
+            <td><code>*_ms</code> fields are unix milliseconds; buff
+              <code>start_timestamp</code>/<code>duration</code> are unix
+              <em>seconds</em>; <code>last_decrease_at</code> is RFC 3339.</td>
+          </tr>
+          <tr>
+            <td>Nulls &amp; errors</td>
+            <td>Present-but-<code>null</code> means unknown/not applicable,
+              never an error. <code>400</code> for bad input,
+              <code>404</code> with <code>{"found": false, …}</code> for
+              misses. Every response carries
+              <code>Cache-Control: no-store</code>; CORS is <code>*</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="coordinates">Coordinates: world &harr; tiles &harr; in-game N/E</h2>
+    <p>
+      Three coordinate systems show up across the relay APIs. They agree on
+      axis directions — <strong>x grows east</strong>,
+      <strong>z grows north</strong> — and differ only in scale and origin:
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>System</th><th>Shape</th><th>Where you meet it</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>World <code>x</code>/<code>z</code></td>
+            <td>Float world units (upstream milli-units &divide; 1000;
+              one tile = 1.0)</td>
+            <td><code>session.position.world_x/world_z</code>, building &
+              player lookups</td>
+          </tr>
+          <tr>
+            <td>Tile <code>tile_x</code>/<code>tile_z</code></td>
+            <td>Integer <strong>odd-r small-hex</strong> coordinates
+              (<code>floor(world)</code>)</td>
+            <td><code>session.position.tile_x/tile_z</code>, BMR1 window
+              origins, all <code>/roads/*</code> endpoints,
+              <code>location_state</code></td>
+          </tr>
+          <tr>
+            <td>In-game <code>N</code>/<code>E</code></td>
+            <td>Integer <strong>super-hex</strong> coordinates — the
+              game's terrain lattice: a true hex grid at 3&times; the tile
+              scale (odd-r; odd super rows sheared one tile east)</td>
+            <td>The in-game map/HUD, hexite deposit claim names
+              (<code>N: 5593, E: 9647</code>),
+              <code>/deposits</code> <code>north</code>/<code>east</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Conversions (the same formulas the game's own claim names use):
+    </p>
+    <div class="diagram"><span class="hi">world (float)</span>
+    │  tile_x = floor(world_x)      tile_z = floor(world_z)
+    ▼
+<span class="ok">tile (odd-r small hex)</span>
+    │  to axial:   q = x − (z − (z&amp;1))/2      r = z
+    │  round each component to the nearest third:  (v+1) / 3  floored
+    │  back to odd-r at super scale:  E = Q + (N − (N&amp;1))/2
+    ▼
+<span class="ok">in-game N/E (super hex)</span>
+    │  inverse (super → its CENTER tile):  x = 3E + (N&amp;1)   z = 3N</div>
+    <p>
+      Notes:
+    </p>
+    <ul>
+      <li><strong>No sign flips — but there is shear.</strong> The super
+        lattice is the tile lattice scaled 3&times; in axial space and
+        rounded, so odd super rows sit one tile east. A hexite deposit
+        named <code>N: 5593, E: 9647</code> is super
+        <code>(E,&nbsp;N)&nbsp;=&nbsp;(9647,&nbsp;5593)</code>, whose
+        center tile is <code>(28942, 16779)</code> — the deposit itself
+        can be any tile of the super's flower, which lands in region 14
+        (origin <code>(23040, 15360)</code>).</li>
+      <li>The inverse lands on the super's <strong>center tile</strong>.
+        The super owns the 7-tile flower around it and shares its six
+        corners with the neighbouring supers — for map pins and path
+        planning the center tile is already sub-HUD-pixel.</li>
+      <li>Region layout: a 5&times;5 grid of 7680&times;7680-tile regions,
+        id 1 at <code>(0,&nbsp;0)</code>, id 25 at
+        <code>(30720,&nbsp;30720)</code>; live origins come from
+        <code>GET /roads/regions</code>. Details:
+        <a href="roads-region-map.html">Region map format</a>.</li>
+      <li>BMR1 windows are already in tiles — header
+        <code>origin_world_x/z</code> plus the relative
+        <code>(lx,&nbsp;lz)</code> of a word gives you
+        <code>(origin + offset)</code> directly; apply the N/E formula only
+        when displaying HUD-style coordinates.</li>
+      <li>BME1 elevation cells are already super-hexes — cell
+        <code>(r,&nbsp;c)</code> of a window is super offset
+        <code>(origin_super_x&nbsp;+&nbsp;c,
+        origin_super_z&nbsp;+&nbsp;r)</code>, so display it as HUD
+        <code>E&nbsp;=&nbsp;origin_super_x&nbsp;+&nbsp;c</code>,
+        <code>N&nbsp;=&nbsp;origin_super_z&nbsp;+&nbsp;r</code> (exact —
+        recover <code>origin_super</code> from the header's center tile,
+        see below).</li>
+    </ul>
+
+    <h2>Converting in practice (Python)</h2>
+    <div class="code-panel active" data-lang="python">
+<pre><code>import json, math, struct, urllib.request
+
+BASE = "https://relay.bitcraftsync.app"
+
+def world_to_tile(wx, wz):
+    return math.floor(wx), math.floor(wz)
+
+def tile_to_ne(x, z):
+    q = x - (z - (z &amp; 1)) // 2           # odd-r tile → axial
+    Q, N = (q + 1) // 3, (z + 1) // 3      # round each to nearest third
+    return N, Q + (N - (N &amp; 1)) // 2     # axial → odd-r super (north, east)
+
+def ne_to_tile(north, east):
+    return east * 3 + (north &amp; 1), north * 3   # super's center tile
+
+# session snapshot → HUD-style coordinates
+snap = json.load(urllib.request.urlopen(
+    f"{BASE}/bitme/session/504403158290646123", timeout=30))
+pos = snap["position"]
+x, z = world_to_tile(pos["world_x"], pos["world_z"])
+north, east = tile_to_ne(x, z)
+print(f'tile ({x}, {z})  →  in-game N {north}, E {east}')
+
+# hexite deposit name → super center tile for /roads or a BMR1 window check
+x, z = ne_to_tile(5593, 9647)              # → (28942, 16779), region 14
+
+# BMR1 window: word (lx, lz) → world tile → HUD coords
+raw = urllib.request.urlopen(
+    f"{BASE}/bitme/session/{snap['player_entity_id']}/resources",
+    timeout=30).read()
+_, _, width, ox, oz, _, _ = struct.unpack_from("&lt;4sHhiiII", raw, 0)
+tiles = struct.unpack_from(f"&lt;{width*width}H", raw, 24)
+i = next(i for i, t in enumerate(tiles) if t &amp; 0x3FF)
+lx, lz = i % width, i // width
+north, east = tile_to_ne(ox + lx, oz + lz)
+print(f"first resource at world tile ({ox + lx}, {oz + lz})"
+      f" → N {north}, E {east}")</code></pre>
+    </div>
+
+    <h2>Session snapshot in one look</h2>
+    <p>
+      Top-level fields of <code>GET /bitme/session/&lt;id&gt;</code> —
+      full field-by-field reference with real payloads lives in
+      <code>crates/relay-cache/BITME-API.md</code> in the relay repo:
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Field</th><th>Meaning</th><th>Gotcha</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono">position</td>
+            <td>Last known world position + destination + <code>dimension</code>.</td>
+            <td>Row <em>persists after logout</em> — judge freshness by
+              <code>age_ms</code> and <code>signed_in</code>.
+              <code>dimension &gt; 1</code> is a building interior.</td>
+          </tr>
+          <tr>
+            <td class="mono">claim</td>
+            <td>Claim under the player's tile (name, owner, neutral).</td>
+            <td><code>null</code> in wilderness or interiors.</td>
+          </tr>
+          <tr>
+            <td class="mono">stamina</td>
+            <td><code>current</code>/<code>max</code> +
+              <code>last_decrease_at</code>.</td>
+            <td>Regen is not simulated server-side; project it client-side
+              from the passive rate anchored at <code>last_decrease_at</code>.</td>
+          </tr>
+          <tr>
+            <td class="mono">buffs</td>
+            <td>Live buffs only (placeholders filtered).</td>
+            <td>Expired entries can linger until the next upstream flush —
+              check the countdown, not just presence.</td>
+          </tr>
+          <tr>
+            <td class="mono">actions</td>
+            <td>Action lifecycle per layer (<code>Base</code>,
+              <code>UpperBody</code>): type, start, duration,
+              <code>ends_at_ms</code>, result.</td>
+            <td>Rows persist after completion. In progress iff
+              <code>server_time_ms &lt; ends_at_ms</code>.</td>
+          </tr>
+          <tr>
+            <td class="mono">target</td>
+            <td>The acted-on entity, enriched: name, health/max, respawn
+              gamedata, <code>growth_ends_at_ms</code>.</td>
+            <td><code>health</code> is tracked server-side only while a
+              session polls — expect <code>null</code> on the first poll
+              after targeting.</td>
+          </tr>
+          <tr>
+            <td class="mono">activity_spawns</td>
+            <td>Watched spawns in the player's claim/wilderness: destroy-yield
+              chains + the three Citric Giant bushes.</td>
+            <td>The citric-detection signal: alert when an entry with a
+              citric <code>resource_id</code> appears. Entries expire after
+              30 min or on upstream delete.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The BMR1 resource window</h2>
+    <p>
+      <code>GET /bitme/session/&lt;id&gt;/resources</code> serves a
+      400&times;400 window out of the region's dense tile map — one
+      <code>u16</code> per odd-r tile across the whole 7680&times;7680
+      region, merging three layers:
+    </p>
+    <ul>
+      <li><strong>Resources</strong> — stamped server-side from
+        <code>resource_desc.footprint</code> &times; <code>direction</code>
+        for <em>every</em> <code>resource_state</code> row (trees, ore,
+        clay, sand, mushrooms, berry bushes, fiber, flowers, event
+        resources — all of them).</li>
+      <li><strong>Paving</strong> — player-paved tiles
+        (<code>paved_tile_state</code>), stamped at their joined location
+        into otherwise-empty tiles using the dictionary's separate paving
+        namespace.</li>
+      <li><strong>Water</strong> — one flag per tile derived from the
+        terrain seed (elevation below water level, at terrain super-hex
+        resolution: a water super wets its 7-tile flower, and corner
+        tiles — where three supers meet — are water when <em>any</em> of
+        the three is). Terrain never flips water&rarr;land, so it
+        is filled once and rides along on every word — including
+        otherwise-empty tiles.</li>
+    </ul>
+    <p>
+      The player's tile sits at relative <code>(200,&nbsp;200)</code>; the
+      window covers world tiles <code>origin … origin+399</code> per axis.
+    </p>
+    <ul>
+      <li><strong>Size:</strong> exactly 320,024 bytes = 24-byte header +
+        160,000 little-endian <code>u16</code> tile words (row-major,
+        800 bytes per row).</li>
+      <li><strong>Row order:</strong> row <code>r</code> of the payload is
+        world z = <code>origin_world_z + r</code>; column
+        <code>c</code> is world x = <code>origin_world_x + c</code>.</li>
+      <li><strong>Layer priority:</strong> a tile holds a resource
+        <em>or</em> paving, never both — paving fills only empty tiles and
+        the resource wins the rare collision (observed on ~24 of 416k
+        sampled tiles, always multi-hex formations over pavement). Paving
+        words carry no origin/direction bits.</li>
+      <li><strong>Water-only tiles:</strong> word <code>0x8000</code> (bit
+        15 alone) is plain water with nothing on it.</li>
+      <li><strong>Outside the region:</strong> tile word <code>0</code> —
+        windows overhang region borders and there is no cross-region
+        stitching.</li>
+      <li><strong>Session keep-alive:</strong> the window poll refreshes the
+        session TTL exactly like the snapshot poll.</li>
+    </ul>
+
+    <h2>Header (24 bytes, little-endian)</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Offset</th><th>Type</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0–3</td><td><code>[u8; 4]</code></td><td>Magic <code>BMR1</code></td></tr>
+          <tr><td class="mono">4–5</td><td><code>u16</code></td><td>Format version (<code>1</code>)</td></tr>
+          <tr><td class="mono">6–7</td><td><code>u16</code></td><td>Window width in tiles (<code>400</code>)</td></tr>
+          <tr><td class="mono">8–11</td><td><code>i32</code></td><td><code>origin_world_x</code> — odd-r world tile of relative column 0</td></tr>
+          <tr><td class="mono">12–15</td><td><code>i32</code></td><td><code>origin_world_z</code> — odd-r world tile of relative row 0</td></tr>
+          <tr><td class="mono">16–19</td><td><code>u32</code></td><td>Region id</td></tr>
+          <tr><td class="mono">20–23</td><td><code>u32</code></td><td><code>dict_version</code> — pairs the payload with a resource-dictionary</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Tile word (u16 LE)</h2>
+    <p>
+      Every bit is now allocated:
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Bits</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0–9</td><td>Dictionary index
+            (<code>0</code> = empty tile; capacity 1023). With bit 14 clear
+            this is a <strong>resource</strong> index; with bit 14 set it is
+            a <strong>paving</strong> index — the two live in separate
+            dictionary namespaces, so equal indices never collide.</td></tr>
+          <tr><td class="mono">10</td><td><strong>Origin flag</strong> — this
+            tile is the resource's anchor tile (resources only; never set on
+            paving)</td></tr>
+          <tr><td class="mono">11–13</td><td><code>direction_index</code>
+            (0–5), repeated on every tile of the resource footprint
+            (resources only)</td></tr>
+          <tr><td class="mono">14</td><td><strong>Paving flag</strong> — the
+            tile is player-paved; bits 0–9 hold a paving index (dictionary
+            entries with <code>"paving": true</code>)</td></tr>
+          <tr><td class="mono">15</td><td><strong>Water flag</strong> — the
+            tile's terrain sits below its water level (terrain super-hex
+            resolution: a water super wets its 7-tile flower, and corner
+            tiles — where three supers meet — are water when <em>any</em>
+            of the three is). Rides on every word, including
+            otherwise-empty tiles (<code>0x8000</code> alone = water,
+            nothing on it).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Two rendering styles fall out of this layout. <strong>Per-tile:</strong>
+      paint every occupied tile from the dictionary — no footprint math
+      needed, the server already stamped each tile of every multi-hex
+      shape. <strong>Per-instance:</strong> render one icon per resource by
+      anchoring on tiles with the <em>origin flag</em> set and rotating the
+      resource's <code>resource_desc.footprint</code> by
+      <code>direction</code>; adjacent same-type resources are disambiguated
+      by their origin tiles. Natural layer order for a map: water (bit 15)
+      as the background, paving (bit 14) as the underlay, resources on top.
+      A ready-made hex-grid viewer that does exactly this lives in the relay
+      repo at <code>crates/relay-cache/debug/window.html</code>.
+    </p>
+
+    <h2>The BME1 elevation window</h2>
+    <p>
+      <code>GET /bitme/world/&lt;x&gt;/&lt;z&gt;/elevation</code> serves the
+      terrain half of the same footprint: the super-hexes covering the
+      400&times;400 window anchored at world tile <code>(x, z)</code>.
+      One <code>u64</code> per super-hex, sliced straight from the
+      resident terrain grid. Super-hexes are the game's terrain lattice
+      &mdash; a <em>true hex grid at 3&times; the tile scale</em>,
+      addressed in odd-r offset coordinates the same way small tiles are,
+      <em>not</em> a rectangular 3&times;3 blocking of tile indices:
+    </p>
+    <ul>
+      <li><strong>Lattice:</strong> super <code>(X, Z)</code> (HUD
+        <code>E&nbsp;=&nbsp;X</code>, <code>N&nbsp;=&nbsp;Z</code>) has its
+        <strong>center tile</strong> at <code>(3X + (Z&amp;1), 3Z)</code>
+        &mdash; odd super rows sit one tile right, the odd-r shear at
+        3&times; scale. It exclusively owns the <strong>7-tile
+        flower</strong> around that center and shares the six
+        <strong>corner tiles</strong> where three supers meet.</li>
+      <li><strong>Tile &rarr; super:</strong> convert to axial
+        (<code>q = x &minus; (z &minus; (z&amp;1))/2</code>,
+        <code>r = z</code>), round each component to the nearest third
+        (<code>(v+1)/3</code> floored), convert back to odd-r at the
+        super scale. Corner tiles blend <strong>three</strong> supers
+        &mdash; water at a corner is <em>any</em>-of-the-three, matching
+        the game's <code>is_submerged</code>, and that is exactly the
+        rule behind BMR1's bit 15.</li>
+      <li><strong>Size:</strong> <code>26 + width&middot;height&middot;8</code>
+        bytes &mdash; a 400-tile window covers 134&ndash;137 &times; 136
+        supers (the shear makes the column count depend on the window's
+        row alignment; 145,818&ndash;149,082 bytes). Cells are
+        little-endian <code>u64</code>, row-major in super offset space.</li>
+      <li><strong>Coverage:</strong> every super owning or blended by a
+        tile of the resource window, padded one super on each side so
+        edge corner tiles can still blend. Cell <code>(r, c)</code> is
+        the super at offset <code>(origin_super + (c, r))</code>;
+        recover <code>origin_super</code> from the header's center tile
+        <code>(x, z)</code> via <code>X = (x &minus; (Z&amp;1))/3</code>,
+        <code>Z = z/3</code> (floored division).</li>
+      <li><strong>Outside the region:</strong> cell <code>0</code>, the
+        same zero-fill convention as BMR1.</li>
+      <li><strong>Water:</strong> a cell is underwater when
+        <code>elevation &lt; water_level</code> (missing water data arrives
+        as <code>i16::MIN</code>, which never classifies as water). This
+        is the source of BMR1's bit 15, at full resolution here.</li>
+      <li><strong>Generation:</strong> the header carries the grid's update
+        counter and terraform bumps it. Elevation is the only field that
+        ever changes after seed — refetch when it moves.</li>
+    </ul>
+    <p>
+      The cell layout is the roads terrain cell unchanged — see the
+      <a href="roads-region-map.html">region map format</a> page for the
+      full terrain layer:
+    </p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Cell bits (u64 LE)</th><th>Field</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0–15</td><td><code>elevation</code> (<code>i16</code> stored as u16)</td></tr>
+          <tr><td class="mono">16–31</td><td><code>original_elevation</code> (<code>i16</code>) — pre-terraform</td></tr>
+          <tr><td class="mono">32–47</td><td><code>water_level</code> (<code>i16</code>)</td></tr>
+          <tr><td class="mono">48–55</td><td><code>water_body_type</code> (<code>u8</code>)</td></tr>
+          <tr><td class="mono">56–63</td><td>unused (zero)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>BME1 header (26 bytes, little-endian)</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Offset</th><th>Type</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0–3</td><td><code>[u8; 4]</code></td><td>Magic <code>BME1</code></td></tr>
+          <tr><td class="mono">4–5</td><td><code>u16</code></td><td>Format version (<code>2</code>)</td></tr>
+          <tr><td class="mono">6–7</td><td><code>u16</code></td><td><code>width</code> — super-hex columns (<code>134–137</code>)</td></tr>
+          <tr><td class="mono">8–9</td><td><code>u16</code></td><td><code>height</code> — super-hex rows (<code>136</code>)</td></tr>
+          <tr><td class="mono">10–13</td><td><code>i32</code></td><td><code>origin_center_world_x</code> — world tile of cell (0,&nbsp;0)'s center tile</td></tr>
+          <tr><td class="mono">14–17</td><td><code>i32</code></td><td><code>origin_center_world_z</code></td></tr>
+          <tr><td class="mono">18–21</td><td><code>u32</code></td><td>Region id</td></tr>
+          <tr><td class="mono">22–25</td><td><code>u32</code></td><td><code>generation</code> — grid update counter; terraform bumps it</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Decoding pairs naturally with a BMR1 fetch at the same anchor:
+    </p>
+    <div class="code-panel active" data-lang="python">
+<pre><code># terrain plane for the same anchor as a BMR1 window
+raw = urllib.request.urlopen(
+    f"{BASE}/bitme/world/{x}/{z}/elevation", timeout=30).read()
+magic, version, width, height, cx, cz, region, generation = struct.unpack_from(
+    "&lt;4sHHHiiII", raw, 0)
+assert magic == b"BME1" and version == 2 \
+    and len(raw) == 26 + width * height * 8
+
+cells = struct.unpack_from(f"&lt;{width * height}Q", raw, 26)
+
+def elevation(cell):                     # i16 stored as u16
+    return struct.unpack("&lt;h", struct.pack("&lt;H", cell &amp; 0xFFFF))[0]
+
+# header origin is cell (0, 0)'s CENTER tile → super offset
+X0 = (cx - (cz &amp; 1)) // 3
+Z0 = cz // 3
+
+def tile_to_super(x, z):                 # world tile → super offset
+    q = x - (z - (z &amp; 1)) // 2           # odd-r → axial
+    Q, N = (q + 1) // 3, (z + 1) // 3    # round to nearest thirds
+    return Q + (N - (N &amp; 1)) // 2, N    # axial → odd-r super
+
+def cell_at(tile_x, tile_z):             # world tile → covering cell
+    sx, sz = tile_to_super(tile_x, tile_z)
+    return cells[(sz - Z0) * width + (sx - X0)]
+
+hi = max(elevation(c) for c in cells)
+print(f"region {region}: highest elevation {hi}, generation {generation}")</code></pre>
+    </div>
+
+    <h2>Resource dictionary</h2>
+    <p>
+      The 10-bit tile index is assigned in first-sighting order and is
+      <strong>stable per deploy but not across deploys</strong>. Resource
+      and paving entries use <strong>separate index namespaces</strong> —
+      a tile word's bit 14 says which list an index refers to, so equal
+      indices never collide. <code>dict_version</code> covers both.
+      Fetch the dictionary once per region and refetch it when a window
+      header's <code>dict_version</code> changes:
+    </p>
+    <div class="code-panel active" data-lang="json">
+<pre><code>GET /bitme/region/7/resource-dictionary
+
+{
+  "region": 7,
+  "ready": true,
+  "dict_version": 4018046328,
+  "entries": [
+    {
+      "index": 1,
+      "resource_id": 815748648,
+      "name": "Rough Quarry Rock",
+      "harvestable": false,
+      "max_health": 5000,
+      "despawn_time_secs": 0.0,
+      "respawn_time_secs": 0.0,
+      "paving": false
+    },
+    {
+      "index": 1,
+      "paving_type_id": 59838,
+      "name": "Cobblestone Road",
+      "paving": true
+    }
+  ]
+}</code></pre>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono">index</td>
+            <td>The 10-bit value carried in tile words (index <code>0</code>
+              is the empty sentinel and is not listed).</td>
+          </tr>
+          <tr>
+            <td class="mono">paving / paving_type_id</td>
+            <td><code>true</code> on paving entries, which carry the raw
+              <code>paving_type_id</code> instead of
+              <code>resource_id</code> (names from the global
+              <code>paving_tile_desc</code> catalog).</td>
+          </tr>
+          <tr>
+            <td class="mono">name / max_health / …</td>
+            <td><code>resource_desc</code> gamedata on resource entries
+              (<code>null</code> if the desc row is missing).</td>
+          </tr>
+          <tr>
+            <td class="mono">harvestable</td>
+            <td>The old roads-side forestry/mining/clay/sand
+              classification — use it to filter the map client-side; the
+              window includes <strong>all</strong> resource types.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The resources/ws change stream (BMD1)</h2>
+    <p>
+      <code>GET /bitme/session/&lt;entity_id&gt;/resources/ws</code> (a
+      WebSocket — <code>wss://relay.bitcraftsync.app/…</code>) pushes
+      every resource/paving tile change whose world tile falls inside
+      the player's 400&times;400 window. The server keeps <em>only the
+      window coordinates per listener</em> — no window copy, no
+      diffing — and the <strong>client owns convergence</strong>:
+      initial state, reconnect recovery, and resync recovery are all
+      "re-fetch the BMR1 window". Frames are never silently dropped to a
+      live socket; backpressure closes the connection instead, so the
+      delivered stream is totally ordered. The stream is read-only
+      (client&rarr;server frames are ignored; WS pings are answered).
+    </p>
+    <p>
+      Pre-upgrade errors are byte-identical to the HTTP window's (the
+      table below), plus <code>503</code> when the fleet-wide stream cap
+      — 2048 connections, shared with the dim-buildings stream — is
+      reached. One stream per player; heartbeats every 5&nbsp;s also
+      refresh the session TTL.
+    </p>
+
+    <p><strong>Server &rarr; client frames:</strong></p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Frame</th><th>Payload</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>text (first)</td>
+            <td class="mono">{"type":"subscribed",
+              "player_entity_id":"…", "region":14,
+              "anchor":{"x":7690,"z":7700}, "width":400,
+              "dict_version":123456789}</td>
+            <td>Ack after the upgrade. Note <code>region</code> and
+              <code>anchor</code>; pair <code>dict_version</code> with
+              the dictionary.</td>
+          </tr>
+          <tr>
+            <td>binary</td>
+            <td><strong>BMD1</strong> — one per applied upstream batch,
+              only in-window changed tiles (layout below)</td>
+            <td>Apply each entry onto your window:
+              <code>word &rarr; tile at (x, z)</code> when in bounds.
+              Tiles are <strong>world</strong> odd-r coordinates, not
+              window-relative. A <code>0</code> word (or water-bit-only
+              word) means the tile emptied.</td>
+          </tr>
+          <tr>
+            <td>text</td>
+            <td class="mono">{"type":"resync","reason":"reseed"|"live"}</td>
+            <td>The region grid was replaced (upstream disconnect) or
+              finished re-seeding. <strong>Refetch the BMR1 window</strong>;
+              refetch the dictionary too if the next frame's
+              <code>dict_version</code> differs from the snapshot
+              header's.</td>
+          </tr>
+          <tr>
+            <td>text</td>
+            <td class="mono">{"type":"moved","region":7,"anchor":{…}}</td>
+            <td>The player crossed into another region and the stream
+              re-anchored there. Refetch the BMR1 window (different area
+              of the world).</td>
+          </tr>
+          <tr>
+            <td>text</td>
+            <td class="mono">{"type":"gone","player_entity_id":"…"}</td>
+            <td>No live position in any mirrored region for ~60&nbsp;s
+              (logged out, or a deploy/reseed outlasting the window).
+              The server closes right after.</td>
+          </tr>
+          <tr>
+            <td>text</td>
+            <td class="mono">{"ts":1753296000123}</td>
+            <td>Heartbeat every 5&nbsp;s. Treat ~15&nbsp;s without a
+              frame as dead.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>BMD1 frame layout</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Offset</th><th>Type</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">0–3</td><td><code>[u8; 4]</code></td><td>Magic <code>BMD1</code></td></tr>
+          <tr><td class="mono">4–5</td><td><code>u16</code></td><td>Format version (<code>1</code>)</td></tr>
+          <tr><td class="mono">6–9</td><td><code>u32</code></td><td>Region id</td></tr>
+          <tr><td class="mono">10–13</td><td><code>u32</code></td><td><code>dict_version</code> — pair with <code>/resource-dictionary</code></td></tr>
+          <tr><td class="mono">14–15</td><td><code>u16</code></td><td>Entry count <code>n</code> (batches larger than 65535 tiles split into consecutive frames)</td></tr>
+          <tr><td class="mono">16+</td><td><code>n &times;</code> 10 bytes</td><td><code>i32 world_x</code>, <code>i32 world_z</code>, <code>u16 tile word</code> (the same bit layout as BMR1, water bit included)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Duplicate tiles within a frame never occur; writes within one
+      batch collapse to the final word. While walking, keep the
+      movement-triggered BMR1 refetch — the server follows the anchor at
+      ~1&nbsp;s granularity, so trailing-edge events for a few tiles
+      around a fast-moving player are intentionally trimmed until the
+      next full fetch.
+    </p>
+
+    <h2>Consuming the stream (Python)</h2>
+    <div class="code-panel active" data-lang="python">
+<pre><code># pip install websocket-client        (stdlib has no WebSocket client)
+import json, struct, urllib.request, websocket
+
+BASE = "https://relay.bitcraftsync.app"
+PLAYER = "504403158290646123"
+
+# 1. fetch the BMR1 window first — connect order is safe either way:
+#    replaying an already-applied tile word is idempotent, and frames
+#    that race the fetch carry the same final word.
+raw = urllib.request.urlopen(
+    f"{BASE}/bitme/session/{PLAYER}/resources", timeout=30).read()
+
+# 2. open the stream; on "subscribed" note region/anchor
+ws = websocket.create_connection(
+    f"wss://relay.bitcraftsync.app/bitme/session/{PLAYER}/resources/ws")
+ack = json.loads(ws.recv())
+assert ack["type"] == "subscribed", ack
+
+def refetch_window():                    # 4. the universal recovery move
+    return urllib.request.urlopen(
+        f"{BASE}/bitme/session/{PLAYER}/resources", timeout=30).read()
+
+while True:
+    try:
+        op, data = ws.recv_data()
+    except websocket.WebSocketException:          # closed, any reason
+        raw = refetch_window(); break              # …then reconnect with backoff
+
+    if op == websocket.ABNF.OPCODE_TEXT:
+        msg = json.loads(data)
+        if msg.get("type") in ("resync", "moved"):
+            raw = refetch_window(); break          # + dictionary on dict_version change
+        # {"type":"gone", …} → server closes right after; {"ts":…} = heartbeat
+    elif op == websocket.ABNF.OPCODE_BINARY:
+        # 3. apply each BMD1 entry onto the window
+        magic, ver, region, dict_version, n = struct.unpack_from(
+            "&lt;4sHIIH", data, 0)
+        assert magic == b"BMD1" and ver == 1
+        for x, z, word in struct.iter_unpack("&lt;iiH", data[16:16 + n * 10]):
+            apply_word(x, z, word)   # word → tile at (x, z) when in bounds;
+                                     # 0 (or water-only) = tile emptied</code></pre>
+    </div>
+
+    <h2>Decoding a window (Python)</h2>
+    <div class="code-panel active" data-lang="python">
+<pre><code>import json, struct, urllib.request
+
+BASE = "https://relay.bitcraftsync.app"
+PLAYER = "504403158290646123"          # entity_id string from /bitme/resolve
+
+# --- fetch the window (binary!) -------------------------------------------
+raw = urllib.request.urlopen(
+    f"{BASE}/bitme/session/{PLAYER}/resources", timeout=30).read()
+
+magic, version, width, ox, oz, region, dict_version = struct.unpack_from(
+    "&lt;4sHhiiII", raw, 0)
+assert magic == b"BMR1" and version == 1 and len(raw) == 24 + width*width*2
+
+tiles = struct.unpack_from(f"&lt;{width*width}H", raw, 24)
+
+def word(t):
+    return {
+        "index": t &amp; 0x3FF,                # bits 0-9
+        "origin": bool(t &amp; 0x400),         # bit  10
+        "direction": (t &gt;&gt; 11) &amp; 0b111,   # bits 11-13
+        "paving": bool(t &amp; 0x4000),         # bit  14
+        "water": bool(t &amp; 0x8000),          # bit  15
+    }
+
+# --- resolve names via the dictionary (refetch on dict_version change) -----
+d = json.load(urllib.request.urlopen(
+    f"{BASE}/bitme/region/{region}/resource-dictionary", timeout=30))
+assert d["dict_version"] == dict_version
+# separate namespaces: (paving?, index) → entry
+names = {(e["paving"], e["index"]): e for e in d["entries"]}
+
+# --- classify every tile: water / paving / resource -------------------------
+water = paving = resource = 0
+for t in tiles:
+    w = word(t)
+    if w["water"]: water += 1
+    if w["paving"]: paving += 1
+    elif t &amp; 0x3FF and not w["paving"]: resource += 1
+print(f"water tiles: {water}, paved: {paving}, resource tiles: {resource}")
+
+# --- list resource instances (one per origin tile; paving has no origin) ----
+for i, t in enumerate(tiles):
+    w = word(t)
+    if w["origin"]:
+        lx, lz = i % width, i // width
+        e = names[(False, w["index"])]
+        print(f'{e.get("name", "?")} dir={w["direction"]} '
+              f'at world tile ({ox + lx}, {oz + lz})')
+
+# paving underlay: tiles where word["paving"] is set —
+#   names[(True, w["index"])]["name"] gives e.g. "Cobblestone Road"</code></pre>
+    </div>
+    <p>
+      With <code>curl</code>:
+    </p>
+    <div class="code-panel active" data-lang="shell">
+<pre><code>curl -s 'https://relay.bitcraftsync.app/bitme/resolve?name=whisper' | jq .
+curl -s "https://relay.bitcraftsync.app/bitme/session/$ENTITY_ID" | jq .
+curl -s "https://relay.bitcraftsync.app/bitme/session/$ENTITY_ID/resources" -o window.bmr1
+ls -l window.bmr1   # 320024 bytes
+curl -s "https://relay.bitcraftsync.app/bitme/world/$X/$Z/resources" -o pan.bmr1
+curl -s "https://relay.bitcraftsync.app/bitme/world/$X/$Z/elevation" -o pan.bme1
+ls -l pan.bme1      # 145818–149082 bytes (width varies with alignment)
+curl -s "https://relay.bitcraftsync.app/bitme/region/$REGION/resource-dictionary" | jq .
+# the change stream is a WebSocket — try it with any WS client, e.g.:
+#   websocat wss://relay.bitcraftsync.app/bitme/session/$ENTITY_ID/resources/ws
+# (first frame: the {"type":"subscribed",…} ack; Ctrl-C to leave)</code></pre>
+    </div>
+
+    <h2>Window error modes</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">200</td><td>320,024-byte BMR1 payload.</td></tr>
+          <tr>
+            <td class="mono">202</td>
+            <td>Empty body — the region grid is still seeding (right after a
+              deploy). Retry with backoff.</td>
+          </tr>
+          <tr>
+            <td class="mono">400</td>
+            <td><code>{"error": "entity_id must be a u64"}</code>; the
+              world windows instead say
+              <code>{"error": "x and z must be i32 world tile coordinates"}</code>.</td>
+          </tr>
+          <tr>
+            <td class="mono">404</td>
+            <td><code>{"found": false, …}</code> — player not present in any
+              mirrored region, not on the overworld (interiors have no tile),
+              or the region has no resource map. A player resolves globally
+              even when their region is not mirrored, but a session requires
+              presence in a mirrored one. The world windows instead 404 with
+              <code>{"found": false, "x": …, "z": …}</code> when the
+              coordinates fall outside the 5&times;5 region grid.</td>
+          </tr>
+          <tr><td class="mono">503</td><td>Roads cache not enabled (not the case in production).</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="banner warn">
+      <b>Deploys restart the mirror</b> (~15–20 min reseed). During that
+      window JSON endpoints return <code>404 {"found": false, …}</code>, the
+      window returns <code>202</code> then <code>404</code>, and
+      <code>/cache-health</code> flips to <code>ready: false</code>. The
+      change stream emits <code>resync</code> (<code>reseed</code>, then
+      <code>live</code> at seed completion) and may close
+      (<code>gone</code>) if the outage outlasts its ~60&nbsp;s
+      no-position window. Back off
+      (&ge;30&nbsp;s), keep countdowns on screen running from the last
+      snapshot, and re-resolve on recovery. Never hold dictionary indices
+      across a <code>dict_version</code> change.
+    </div>
+
+    <div class="diagram"><span class="hi">Bit-Me app</span>
+    │  1. resolve?name=whisper        → entity_id, region 7, host/module
+    │  2. session/&lt;id&gt; @ ~1 Hz       → position, claim, stamina, buffs,
+    │                                    actions, target, activity_spawns
+    │  3. region/7/resource-dictionary → index → resource_id + names
+    ▼
+<span class="ok">session/&lt;id&gt;/resources</span>  → 320,024-byte BMR1 window
+    │  header: magic, width 400, origin (world tiles), region, dict_version
+    └─ 160,000 u16 words: 10-bit index │ origin │ 3-bit direction
+         expand via the dictionary; refetch it when dict_version moves
+
+<span class="ok">session/&lt;id&gt;/resources/ws</span> → live BMD1 deltas over the same window
+    │  text: subscribed → binary: BMD1 batches → resync / moved / gone / ts
+    └─ per changed tile: i32 world x, i32 world z, u16 word (same bit layout)
+         recovery is always: refetch the BMR1 window, then reconnect
+
+<span class="ok">world/&lt;x&gt;/&lt;z&gt;/resources</span>   → same BMR1 window at any world tile
+<span class="ok">world/&lt;x&gt;/&lt;z&gt;/elevation</span>   → BME1 plane over the same
+    │  footprint: 134–137 × 136 super-hexes (hex lattice at 3× tile scale)
+    │  header v2: magic, width, height, center-tile origin, region, generation
+    └─ 18,224–18,632 u64 cells: elevation │ original │ water level │ body type
+         refetch when generation moves (terraform)</div>
+
+    <div class="next">
+      <a href="relay-cache.html">← relay-cache joins</a>
+      <a href="troubleshoot.html">If it fails <span class="muted">/health checks, 502, 90s resets</span></a>
+    </div>
+  </main>
+</div>
+<script src="js/tutorial.js"></script>
+</body>
+</html>
