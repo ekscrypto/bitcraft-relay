@@ -70,7 +70,7 @@
     <h2>curl</h2>
     <div class="code-panel active" data-lang="curl">
 <pre><code>curl -fsSL \
-  "https://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/schema?version=9" \
+  "https://relay.bitcraftsync.app:3014/v1/database/idc-14/schema?version=9" \
   -o schema-bc14.json
 
 # Quick peek at public table names (jq):
@@ -85,7 +85,7 @@ import urllib.request
 
 URL = (
     "https://relay.bitcraftsync.app:3014"
-    "/v1/database/relay-mirror-bc14/schema?version=9"
+    "/v1/database/idc-14/schema?version=9"
 )
 
 with urllib.request.urlopen(URL, timeout=60) as resp:
@@ -118,7 +118,7 @@ print(f"{len(tables)} tables, e.g. {tables[:5]}")</code></pre>
 async fn main() -&gt; Result&lt;()&gt; {
     let url = concat!(
         "https://relay.bitcraftsync.app:3014",
-        "/v1/database/relay-mirror-bc14/schema?version=9",
+        "/v1/database/idc-14/schema?version=9",
     );
     let bytes = reqwest::get(url).await?.error_for_status()?.bytes().await?;
     println!("downloaded {} bytes", bytes.len());
@@ -152,12 +152,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <pre><code># Example — adjust flags to your spacetime CLI version:
 spacetime generate --lang rust \
   --out-dir ./module_bindings \
-  --module-name relay-mirror-bc14 \
+  --module-name idc-14 \
   -s https://relay.bitcraftsync.app:3014
 
 spacetime generate --lang python \
   --out-dir ./module_bindings \
-  --module-name relay-mirror-bc14 \
+  --module-name idc-14 \
   -s https://relay.bitcraftsync.app:3014</code></pre>
     </div>
     <p>

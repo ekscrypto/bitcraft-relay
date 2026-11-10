@@ -71,12 +71,12 @@ if [ -z "${HARNESS:-}" ] || [ ! -x "$HARNESS" ]; then
 fi
 
 # The mirrored database name for a public port, per PORTS.md / public-mirror:
-# 3000 -> bitcraft-live-global, 30NN -> bitcraft-live-N.
+# 3000 -> idc-global, 30NN -> idc-N.
 database_for() {
     if [ "$1" = "3000" ]; then
-        echo "bitcraft-live-global"
+        echo "idc-global"
     else
-        echo "bitcraft-live-$(( $1 - 3000 ))"
+        echo "idc-$(( $1 - 3000 ))"
     fi
 }
 

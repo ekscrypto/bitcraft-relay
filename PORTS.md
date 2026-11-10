@@ -64,10 +64,10 @@ wss://relay.bitcraftsync.app:<port>/v1/database/<database>/subscribe
 https://relay.bitcraftsync.app:<port>/v1/database/<database>/schema?version=9
 ```
 
-`<database>` is the upstream name: `bitcraft-live-global` or
-`bitcraft-live-N`. Any public port in the open band reaches every
-database (nginx fans all ports to the single mirror listen). Prefer
-`3000 + regionID` for clarity.
+`<database>` is the upstream name: `idc-global` or `idc-N` (1.0 release
+fleet; the EA2 names `bitcraft-live-*` were retired 2026-11). Any public
+port in the open band reaches every database (nginx fans all ports to
+the single mirror listen). Prefer `3000 + regionID` for clarity.
 
 Subprotocol (offered in `Sec-WebSocket-Protocol`; the relay prefers v2
 when several are offered): `v2.bsatn.spacetimedb` is the default —

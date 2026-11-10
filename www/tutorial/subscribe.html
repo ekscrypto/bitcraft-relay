@@ -128,7 +128,7 @@ import { DbConnection } from "./module_bindings";
 
 const conn = DbConnection.builder()
   .withUri("wss://relay.bitcraftsync.app:3014")
-  .withDatabaseName("relay-mirror-bc14")
+  .withDatabaseName("idc-14")
   .onConnect((conn, identity, token) => {
     console.log("connected", identity.toHexString(), "token_len", token.length);
 
@@ -156,7 +156,7 @@ import json
 import websockets
 
 HOST = "wss://relay.bitcraftsync.app:3014"
-DB = "relay-mirror-bc14"
+DB = "idc-14"
 URL = f"{HOST}/v1/database/{DB}/subscribe?compression=None"
 SUBPROTOCOL = "v1.json.spacetimedb"
 
@@ -270,7 +270,7 @@ function subscribeSequential(conn: DbConnection, i = 0) {
 
 DbConnection.builder()
   .withUri("wss://relay.bitcraftsync.app:3014")
-  .withDatabaseName("relay-mirror-bc14")
+  .withDatabaseName("idc-14")
   .onConnect((conn) => subscribeSequential(conn))
   .onConnectError((_ctx, err) => console.error(err))
   .build();</code></pre>
@@ -306,7 +306,7 @@ fn subscribe_at(ctx: &amp;impl DbContext, i: usize) {
 fn main() {
     let _conn = DbConnection::builder()
         .with_uri("wss://relay.bitcraftsync.app:3014")
-        .with_database_name("relay-mirror-bc14")
+        .with_database_name("idc-14")
         .on_connect(|ctx, _id, _token| subscribe_at(&amp;ctx, 0))
         .build()
         .expect("connect");
@@ -322,7 +322,7 @@ import asyncio, json, websockets
 
 URL = (
     "wss://relay.bitcraftsync.app:3014"
-    "/v1/database/relay-mirror-bc14/subscribe?compression=None"
+    "/v1/database/idc-14/subscribe?compression=None"
 )
 ENTITY = 1297036692699996362  # Maplesugar on region 14
 

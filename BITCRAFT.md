@@ -1,7 +1,10 @@
 # BitCraft server architecture
 
-Fan-research against the live Early Access deployment. Hostnames, module
-names, and table layouts can change without notice.
+Fan-research against the live deployment — updated 2026-11 for the
+**1.0 official release** (`bitcraft-release.spacetimedb.com`, `idc-*`
+modules), replacing the Early Access environment
+(`bitcraft-early-access.spacetimedb.com`, `bitcraft-live-*`). Hostnames,
+module names, and table layouts can change without notice.
 
 ## Overview
 
@@ -16,31 +19,30 @@ machine.
 
 | Module | Role |
 |--------|------|
-| `bitcraft-live-global` | Reference data (items, recipes, …) and the meta tables that advertise shards |
-| `bitcraft-live-{N}` | Gameplay shard for region ID `N` (1–25) |
+| `idc-global` | Reference data (items, recipes, …) and the meta tables that advertise shards |
+| `idc-{N}` | Gameplay shard for region ID `N` (1–25) |
 
-As of 2026-07-28 every `region_connection_info.host` is still the same
-URL string:
+Verified 2026-11-10 against 1.0 `region_connection_info`: every row is
 
 ```
-https://bitcraft-early-access.spacetimedb.com
+https://bitcraft-release.spacetimedb.com
 ```
 
-That is a **shared DNS name**, not proof of one server. The name
-currently resolves to multiple A records, and the `host` column exists
-so a region can point at a different origin (different domain, same
-usual TLS port) without a client rebuild. Always use the `host` from
-discovery — do not assume global and region *N* are co-located.
+That is a **shared DNS name**, not proof of one server. The `host`
+column exists so a region can point at a different origin (different
+domain, same usual TLS port) without a client rebuild. Always use the
+`host` from discovery — do not assume global and region *N* are
+co-located.
 
-## Protocol: SpacetimeDB v1
+## Protocol: SpacetimeDB v2
 
-BitCraft still speaks **SpacetimeDB protocol v1** on the wire
-(`v1.bsatn.spacetimedb` or `v1.json.spacetimedb`). Both subprotocols are
-accepted interchangeably on `bitcraft-live-*` modules.
-
-The relay fleet uses the BSATN path (`--upstream-protocol v1`). Public
-scrapers often prefer JSON because it is easier to debug from Python —
-that is a client convention, not a server requirement.
+Since the game servers moved to **SpacetimeDB v2.0** (2026-09-21, late
+EA2; carried into 1.0), the upstream speaks the v2 wire protocol
+(`v2.bsatn.spacetimedb`). The relay mirrors over v2 BSATN; downstream
+clients of our relay can still use `v1.bsatn` / `v1.json` (served by the
+mirror), but `v1.json` directly against the upstream requires a
+developer token — anonymous upstream connections stall before
+`IdentityToken`/`InitialConnection`.
 
 Subscribe / schema URL shape (replace `<host>` with the discovered
 origin, `https` → `wss` for the socket):
@@ -52,8 +54,8 @@ https://<host-without-scheme>/v1/database/<module>/schema?version=9
 
 ## Connect global first, then discover shards
 
-1. Authenticate (see below) and open a v1 WebSocket to
-   `bitcraft-live-global` on the known bootstrap host (today: the EA
+1. Authenticate (see below) and open a WebSocket to
+   `idc-global` on the known bootstrap host (today: the release
    hostname above).
 2. Subscribe to the public meta tables that describe the world.
 3. For the region you want, read its `host` + `module` from
@@ -70,69 +72,70 @@ https://<host-without-scheme>/v1/database/<module>/schema?version=9
 | `region_control_info` | `region_id`, `initialized`, `allow_players`, `allow_player_spawns` | Whether the shard is open |
 | `region_sign_in_parameters` | caps / queue / grace period per `region_id` | Sign-in limits |
 
-`module` is `bitcraft-live-{id}`. Treat `host` as authoritative per
-region even when every row currently repeats the EA hostname.
+`module` is `idc-{id}` (verified 2026-11-10). Treat `host` as authoritative per
+region even when every row currently repeats the release hostname.
 Anonymous identities cannot read these tables — use a developer token
 (see Authentication).
 
 ## Regions (full 5×5 = 25)
 
 The world is a fixed **5×5 grid of region IDs 1–25**. Every cell has a
-`region_connection_info` row and a `bitcraft-live-{N}` module name.
-Only a subset is currently initialized for players
-(`region_control_info` / `region_population_info`).
+`region_connection_info` row and an `idc-{N}` module name.
+For 1.0, **9 regions are player-buildable: 8, 9, 10, 12, 13, 14, 17, 18,
+19**; the relay mirrors exactly those plus global.
 
-Layout (**north up**, west → east), snapshot **2026-07-28** from
-`world_region_name_state` + live population rows:
+Layout (**north up**, west → east), grid geometry from EA2 (2026-07-28).
+Region **names** below are EA2-era — `world_region_name_state` was still
+empty on 1.0 at cutover (pre-launch), so 1.0 display names are pending
+verification:
 
 ```
-21             22             23 Northern Islands*  24             25
-16             17 Draxen*     18 Oryxen*            19 Zephra*     20
-11 Western Is.* 12 Elyndor*   13 Hexalis*           14 Lumethis*   15 Eastern Is.*
- 6              7 Virexal*     8 Solmere*            9 Marowik*    10
- 1              2              3 Southern Islands*   4              5
+21             22             23 Northern Islands   24             25
+16             17 Draxen•     18 Oryxen•            19 Zephra•     20
+11 Western Is. 12 Elyndor•   13 Hexalis•           14 Lumethis•   15 Eastern Is.
+ 6              7 Virexal      8 Solmere•            9 Marowik•    10
+ 1              2              3 Southern Islands    4              5
 ```
 
 IDs increase west→east within a row and south→north by row
 (`1` = south-west corner, `21` = north-west corner).
-`*` = present in `region_population_info` / `region_control_info` (player-facing
-shard today). Unmarked cells still appear in `region_connection_info` with
-placeholder names like `Region N` in `world_region_name_state`.
+`•` = player-buildable in 1.0 (mirrored by the relay). Note region 10
+is buildable in 1.0 but was not live in EA2; EA2-only regions 3, 7, 11,
+15, 23 are not mirrored.
 
-| ID | Name | Module | Live today |
+| ID | Name (EA2-era) | Module | Buildable in 1.0 |
 |----|------|--------|------------|
-| 1 | Region 1 | `bitcraft-live-1` | |
-| 2 | Region 2 | `bitcraft-live-2` | |
-| 3 | Southern Islands | `bitcraft-live-3` | yes |
-| 4 | Region 4 | `bitcraft-live-4` | |
-| 5 | Region 5 | `bitcraft-live-5` | |
-| 6 | Region 6 | `bitcraft-live-6` | |
-| 7 | Virexal | `bitcraft-live-7` | yes |
-| 8 | Solmere | `bitcraft-live-8` | yes |
-| 9 | Marowik | `bitcraft-live-9` | yes |
-| 10 | Region 10 | `bitcraft-live-10` | |
-| 11 | Western Islands | `bitcraft-live-11` | yes |
-| 12 | Elyndor | `bitcraft-live-12` | yes |
-| 13 | Hexalis | `bitcraft-live-13` | yes |
-| 14 | Lumethis | `bitcraft-live-14` | yes |
-| 15 | Eastern Islands | `bitcraft-live-15` | yes |
-| 16 | Region 16 | `bitcraft-live-16` | |
-| 17 | Draxen | `bitcraft-live-17` | yes |
-| 18 | Oryxen | `bitcraft-live-18` | yes |
-| 19 | Zephra | `bitcraft-live-19` | yes |
-| 20 | Region 20 | `bitcraft-live-20` | |
-| 21 | Region 21 | `bitcraft-live-21` | |
-| 22 | Region 21† | `bitcraft-live-22` | |
-| 23 | Northern Islands | `bitcraft-live-23` | yes |
-| 24 | Region 23† | `bitcraft-live-24` | |
-| 25 | Region 24† | `bitcraft-live-25` | |
+| 1 | Region 1 | `idc-1` | |
+| 2 | Region 2 | `idc-2` | |
+| 3 | Southern Islands | `idc-3` | |
+| 4 | Region 4 | `idc-4` | |
+| 5 | Region 5 | `idc-5` | |
+| 6 | Region 6 | `idc-6` | |
+| 7 | Virexal | `idc-7` | |
+| 8 | Solmere | `idc-8` | yes |
+| 9 | Marowik | `idc-9` | yes |
+| 10 | Region 10 | `idc-10` | yes |
+| 11 | Western Islands | `idc-11` | |
+| 12 | Elyndor | `idc-12` | yes |
+| 13 | Hexalis | `idc-13` | yes |
+| 14 | Lumethis | `idc-14` | yes |
+| 15 | Eastern Islands | `idc-15` | |
+| 16 | Region 16 | `idc-16` | |
+| 17 | Draxen | `idc-17` | yes |
+| 18 | Oryxen | `idc-18` | yes |
+| 19 | Zephra | `idc-19` | yes |
+| 20 | Region 20 | `idc-20` | |
+| 21 | Region 21 | `idc-21` | |
+| 22 | Region 22† | `idc-22` | |
+| 23 | Northern Islands | `idc-23` | |
+| 24 | Region 23† | `idc-24` | |
+| 25 | Region 24† | `idc-25` | |
 
-† Placeholder string currently stored in `world_region_name_state` (upstream
+† Placeholder string stored in EA2 `world_region_name_state` (upstream
 data quirk — trust the `id` / module name, not the placeholder label).
 
-Public occupancy mirrors (e.g. Bitjita’s `https://bitjita.com/api/status`)
-track the live subset; **`region_connection_info` is the discovery source
-of truth** for the full 25.
+**`region_connection_info` is the discovery source of truth** for the
+full 25.
 
 ## Authentication
 
@@ -177,7 +180,7 @@ After discovery (example uses today’s advertised host for region 14):
   --jwt-priv-key-path /path/to/id_ecdsa \
   --public-mirror-v1 \
   --mirror-token-file /path/to/.developer-token \
-  --mirror wss://bitcraft-early-access.spacetimedb.com/bitcraft-live-14 \
+  --mirror wss://bitcraft-release.spacetimedb.com/idc-14 \
   ...
 ```
 

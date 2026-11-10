@@ -47,7 +47,7 @@
         From <a href="/health">/health</a> (or the home page table), take
         <code>port</code> and <code>database</code>. Example for region 14:
         host <code>wss://relay.bitcraftsync.app:3014</code>, database
-        <code>relay-mirror-bc14</code>.
+        <code>idc-14</code>.
       </li>
       <li>
         <strong>Offer a subprotocol</strong>
@@ -89,7 +89,7 @@
           </tr>
           <tr>
             <td>Full subscribe path</td>
-            <td class="mono">wss://relay.bitcraftsync.app:3014/v1/database/relay-mirror-bc14/subscribe?compression=None</td>
+            <td class="mono">wss://relay.bitcraftsync.app:3014/v1/database/idc-14/subscribe?compression=None</td>
           </tr>
           <tr>
             <td>Handshake header</td>
@@ -198,7 +198,7 @@ from spacetimedb_sdk.spacetimedb_async_client import SpacetimeDBAsyncClient
 import module_bindings
 
 HOST = "relay.bitcraftsync.app:3014"   # host:port only
-DATABASE = "relay-mirror-bc14"
+DATABASE = "idc-14"
 SSL = True
 
 client = SpacetimeDBAsyncClient(module_bindings)
@@ -232,7 +232,7 @@ import websockets
 SUBPROTOCOL = "v2.bsatn.spacetimedb"
 URL = (
     "wss://relay.bitcraftsync.app:3014"
-    "/v1/database/relay-mirror-bc14/subscribe"
+    "/v1/database/idc-14/subscribe"
     "?compression=None"
 )
 
@@ -277,7 +277,7 @@ use spacetimedb_sdk::DbContext;
 fn main() {
     let conn = DbConnection::builder()
         .with_uri("wss://relay.bitcraftsync.app:3014")
-        .with_database_name("relay-mirror-bc14")
+        .with_database_name("idc-14")
         .on_connect(|_ctx, identity, token| {
             // Runs after InitialConnection — safe to Subscribe from here.
             println!("connected {identity} token_len={}", token.len());
@@ -308,7 +308,7 @@ const SUBPROTOCOL: &amp;str = "v2.bsatn.spacetimedb";
 async fn main() -&gt; Result&lt;()&gt; {
     let url = concat!(
         "wss://relay.bitcraftsync.app:3014",
-        "/v1/database/relay-mirror-bc14/subscribe",
+        "/v1/database/idc-14/subscribe",
         "?compression=None",
     );
     let mut req = url.into_client_request()?;
@@ -328,12 +328,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     </div>
 
     <div class="banner good">
-      <b>Drop-in SDK host.</b> If your client already targets
-      <code>wss://bitcraft-early-access.spacetimedb.com</code> +
-      <code>bitcraft-live-14</code>, switch host →
+      <b>Drop-in SDK host.</b> If your client already targets the game
+      upstream (<code>wss://bitcraft-release.spacetimedb.com</code> +
+      <code>idc-14</code>, developer token required), switch host →
       <code>wss://relay.bitcraftsync.app:3014</code> and database →
-      <code>relay-mirror-bc14</code>. Keep the same SQL / table names from
-      the upstream schema.
+      <code>idc-14</code>. Keep the same SQL / table names from
+      the upstream schema — no token needed on the relay.
     </div>
 
     <h2>TypeScript</h2>
@@ -345,13 +345,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     <div class="code-panel active">
 <pre><code>// npm i spacetimedb
 // spacetime generate --lang typescript --out-dir src/module_bindings \
-//   --module-name relay-mirror-bc14 -s https://relay.bitcraftsync.app:3014
+//   --module-name idc-14 -s https://relay.bitcraftsync.app:3014
 
 import { DbConnection } from "./module_bindings";
 
 const conn = DbConnection.builder()
   .withUri("wss://relay.bitcraftsync.app:3014")
-  .withDatabaseName("relay-mirror-bc14")
+  .withDatabaseName("idc-14")
   .onConnect((conn, identity, token) => {
     // Fires after InitialConnection — start Subscribe here (see Subscribe page).
     console.log("connected", identity.toHexString(), "token_len", token.length);
@@ -370,13 +370,13 @@ const conn = DbConnection.builder()
         </thead>
         <tbody>
           <tr>
-            <td><code>:3000</code> / <code>relay-mirror-bc-global</code></td>
+            <td><code>:3000</code> / <code>idc-global</code></td>
             <td>Shared reference / catalog-style data that is not per-world
               (item/recipe/desc tables as mirrored globally). Not where live
               players and claims for a world live.</td>
           </tr>
           <tr>
-            <td><code>:3000+N</code> / <code>relay-mirror-bcN</code></td>
+            <td><code>:3000+N</code> / <code>idc-N</code></td>
             <td>World state for region <code>N</code> — players, claims,
               inventories, hexite, storage logs. Use this for almost all
               gameplay tooling.</td>

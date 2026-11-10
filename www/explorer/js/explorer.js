@@ -19,20 +19,16 @@
   };
 
   var FALLBACK_REGIONS = [
-    { name: "global", port: 3000, database: "relay-mirror-bc-global" },
-    { name: "bitcraft-live-3", port: 3003, database: "relay-mirror-bc3" },
-    { name: "bitcraft-live-7", port: 3007, database: "relay-mirror-bc7" },
-    { name: "bitcraft-live-8", port: 3008, database: "relay-mirror-bc8" },
-    { name: "bitcraft-live-9", port: 3009, database: "relay-mirror-bc9" },
-    { name: "bitcraft-live-11", port: 3011, database: "relay-mirror-bc11" },
-    { name: "bitcraft-live-12", port: 3012, database: "relay-mirror-bc12" },
-    { name: "bitcraft-live-13", port: 3013, database: "relay-mirror-bc13" },
-    { name: "bitcraft-live-14", port: 3014, database: "relay-mirror-bc14" },
-    { name: "bitcraft-live-15", port: 3015, database: "relay-mirror-bc15" },
-    { name: "bitcraft-live-17", port: 3017, database: "relay-mirror-bc17" },
-    { name: "bitcraft-live-18", port: 3018, database: "relay-mirror-bc18" },
-    { name: "bitcraft-live-19", port: 3019, database: "relay-mirror-bc19" },
-    { name: "bitcraft-live-23", port: 3023, database: "relay-mirror-bc23" },
+    { name: "global", port: 3000, database: "idc-global" },
+    { name: "idc-8", port: 3008, database: "idc-8" },
+    { name: "idc-9", port: 3009, database: "idc-9" },
+    { name: "idc-10", port: 3010, database: "idc-10" },
+    { name: "idc-12", port: 3012, database: "idc-12" },
+    { name: "idc-13", port: 3013, database: "idc-13" },
+    { name: "idc-14", port: 3014, database: "idc-14" },
+    { name: "idc-17", port: 3017, database: "idc-17" },
+    { name: "idc-18", port: 3018, database: "idc-18" },
+    { name: "idc-19", port: 3019, database: "idc-19" },
   ];
 
   // ---- DOM ----

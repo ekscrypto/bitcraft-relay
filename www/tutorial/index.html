@@ -96,9 +96,9 @@
     <h2>Global vs regional</h2>
     <p>
       <strong>Regional</strong> (<code>3000 + N</code>,
-      <code>relay-mirror-bcN</code>) holds live world state for that BitCraft
+      <code>idc-N</code>) holds live world state for that BitCraft
       region — players, claims, inventories. <strong>Global</strong>
-      (<code>:3000</code>, <code>relay-mirror-bc-global</code>) is the
+      (<code>:3000</code>, <code>idc-global</code>) is the
       shared/reference mirror. Cross-region HTTP searches
       (<code>/player?name=</code>, <code>/claim?name=</code>,
       <code>/deposits</code>) already span every regional cache shard.
@@ -131,7 +131,7 @@
           </tr>
           <tr>
             <td>Database (mirror)</td>
-            <td><code>relay-mirror-bc-global</code> / <code>relay-mirror-bc&lt;N&gt;</code></td>
+            <td><code>idc-global</code> / <code>idc-&lt;N&gt;</code></td>
           </tr>
           <tr>
             <td>Subscribe URL</td>
@@ -158,7 +158,7 @@
 <span class="ok">Frontend proxy F</span>  (v1 / v2 negotiation, metrics)
     │  loopback
     ▼
-<span class="ok">Local SpacetimeDB L</span>  (mirror module relay-mirror-bc14)
+<span class="ok">Local SpacetimeDB L</span>  (mirror module idc-14)
     ▲
     │  relay_apply_* writes
 <span class="hi">Relay R</span> ←── single upstream sub to BitCraft region 14</div>

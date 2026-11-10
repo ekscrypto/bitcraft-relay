@@ -48,7 +48,7 @@ and the query/catalogue surface.
   status on `:3130`, cache API on `127.0.0.1:8090`.
   `mirror-health.service` polls `:3130` and serves the fleet `/health`
   JSON on `:8082`. Clients select regions by database name
-  (`bitcraft-live-global`, `bitcraft-live-N`, …).
+  (`idc-global`, `idc-N`, … — 1.0 release fleet).
 - Operator notes (host names, account specifics, deploy IPs) live in
   `CLAUDE.local.md` / `AGENTS.local.md`, which are gitignored. Copy
   them in manually when standing up a new host.

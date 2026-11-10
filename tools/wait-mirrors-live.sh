@@ -34,7 +34,7 @@ while time.monotonic() < deadline:
                 and m.get("tables_live") == m.get("tables_total")]
         detail = " ".join(
             "{}:{}".format(
-                m.get("database", "?").removeprefix("bitcraft-live-"),
+                m.get("database", "?").removeprefix("idc-").removeprefix("bitcraft-live-"),
                 m.get("connectivity", "?")
                 if m.get("connectivity") == "live"
                 else "{}({}/{})".format(m.get("connectivity", "?"),

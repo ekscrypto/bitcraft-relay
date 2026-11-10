@@ -218,7 +218,7 @@
       any number of downstream clients &mdash; so
       community tools (BitCraftMap, BitCraftSync, BitJita, &hellip;) share one
       upstream cost instead of each holding their own subscription. Point your
-      SpacetimeDB SDK at the addresses below (<code>bitcraft-live-*</code>
+      SpacetimeDB SDK at the addresses below (<code>idc-*</code>
       databases); it&rsquo;s a drop-in
       <code>wss://</code> replacement. New here?
       Start with the <a href="/tutorial/">step-by-step tutorial</a>
@@ -306,8 +306,8 @@
   <h2>SpacetimeDB relays</h2>
   <p class="section-note">
     Each row is a live mirrored region served by a single public-mirror
-    backend. Databases are named <code>bitcraft-live-*</code>
-    (<code>bitcraft-live-global</code> and <code>bitcraft-live-N</code> per
+    backend. Databases are named <code>idc-*</code>
+    (<code>idc-global</code> and <code>idc-N</code> per
     region). Connect your SpacetimeDB SDK with the <b>SDK address</b> as the
     host and the <b>Database</b> as the database name, or open the full
     subscribe URL for raw-WebSocket testing. Prefer
@@ -369,7 +369,7 @@
         <tr>
           <td>
             <code>https://relay.bitcraftsync.app:&lt;port&gt;/v1/database/&lt;mirror-database&gt;/schema?version=9</code>
-            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app:3014/v1/database/bitcraft-live-14/schema?version=9</div>
+            <div class="curl"><span class="prompt">$</span> curl https://relay.bitcraftsync.app:3014/v1/database/idc-14/schema?version=9</div>
           </td>
         </tr>
       </tbody>
@@ -674,23 +674,19 @@
   var timer = null;
 
   // Known region set as a degraded fallback if /health is unreachable.
-  // Mirrors the live-instance table in the repo (CLAUDE.local.md). Clearly
-  // marked stale when shown. Kept to the public 3000-3025 band.
+  // Mirrors the mirror unit's --mirror list (1.0 release fleet, 2026-11).
+  // Clearly marked stale when shown. Kept to the public 3000-3025 band.
   var FALLBACK_SOURCES = [
-    { name: "global",            port: 3000, database: "bitcraft-live-global" },
-    { name: "bitcraft-live-3",   port: 3003, database: "bitcraft-live-3"  },
-    { name: "bitcraft-live-7",   port: 3007, database: "bitcraft-live-7"  },
-    { name: "bitcraft-live-8",   port: 3008, database: "bitcraft-live-8"  },
-    { name: "bitcraft-live-9",   port: 3009, database: "bitcraft-live-9"  },
-    { name: "bitcraft-live-11",  port: 3011, database: "bitcraft-live-11" },
-    { name: "bitcraft-live-12",  port: 3012, database: "bitcraft-live-12" },
-    { name: "bitcraft-live-13",  port: 3013, database: "bitcraft-live-13" },
-    { name: "bitcraft-live-14",  port: 3014, database: "bitcraft-live-14" },
-    { name: "bitcraft-live-15",  port: 3015, database: "bitcraft-live-15" },
-    { name: "bitcraft-live-17",  port: 3017, database: "bitcraft-live-17" },
-    { name: "bitcraft-live-18",  port: 3018, database: "bitcraft-live-18" },
-    { name: "bitcraft-live-19",  port: 3019, database: "bitcraft-live-19" },
-    { name: "bitcraft-live-23",  port: 3023, database: "bitcraft-live-23" }
+    { name: "global",   port: 3000, database: "idc-global" },
+    { name: "idc-8",    port: 3008, database: "idc-8"  },
+    { name: "idc-9",    port: 3009, database: "idc-9"  },
+    { name: "idc-10",   port: 3010, database: "idc-10" },
+    { name: "idc-12",   port: 3012, database: "idc-12" },
+    { name: "idc-13",   port: 3013, database: "idc-13" },
+    { name: "idc-14",   port: 3014, database: "idc-14" },
+    { name: "idc-17",   port: 3017, database: "idc-17" },
+    { name: "idc-18",   port: 3018, database: "idc-18" },
+    { name: "idc-19",   port: 3019, database: "idc-19" }
   ];
 
   function el(tag, cls, html) {
