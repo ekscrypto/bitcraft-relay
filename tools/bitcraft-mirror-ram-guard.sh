@@ -5,8 +5,8 @@
 # Uses MemAvailable from /proc/meminfo (same signal the kernel OOM logic
 # uses). Polls every BITCRAFT_MIRROR_RAM_GUARD_INTERVAL seconds (default 2).
 # When MemAvailable drops below BITCRAFT_MIRROR_RAM_MIN_FREE_KB (default
-# 2 GiB — during blue/green overlap green must not OOM the warm blue
-# standby), stops bitcraft-mirror.service immediately and keeps watching so a
+# 2 GiB — keep the rest of the host alive rather than risk a random OOM kill),
+# stops bitcraft-mirror.service immediately and keeps watching so a
 # manual restart cannot run while RAM stays low.
 #
 # Intended to run under bitcraft-mirror-ram-guard.service.
@@ -45,7 +45,7 @@ while :; do
         if mirror_active; then
             log "CRITICAL: MemAvailable=${avail}KiB < ${MIN_FREE_KB}KiB — stopping ${UNIT}"
             systemctl stop "$UNIT"
-            log "stopped ${UNIT}; flip nginx back (rollback script) to serve blue"
+            log "stopped ${UNIT}; free memory, then restart it manually"
         fi
     fi
 

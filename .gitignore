@@ -14,7 +14,8 @@
 CLAUDE.local.md
 AGENTS.local.md
 
-# BitCraft auth token (long-lived bearer credential).
+# BitCraft upstream developer token (long-lived bearer credential).
+.developer-token
 .bitcraft-token
 
 # Python bytecode for any local scripts.

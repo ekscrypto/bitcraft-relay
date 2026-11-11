@@ -81,7 +81,7 @@ Anonymous identities cannot read these tables — use a developer token
 
 The world is a fixed **5×5 grid of region IDs 1–25**. Every cell has a
 `region_connection_info` row and an `idc-{N}` module name.
-For 1.0, **9 regions are player-buildable: 8, 9, 10, 12, 13, 14, 17, 18,
+For 1.0, **9 regions are player-buildable: 7, 8, 9, 12, 13, 14, 17, 18,
 19**; the relay mirrors exactly those plus global.
 
 Layout (**north up**, west → east), grid geometry from EA2 (2026-07-28).
@@ -93,15 +93,18 @@ verification:
 21             22             23 Northern Islands   24             25
 16             17 Draxen•     18 Oryxen•            19 Zephra•     20
 11 Western Is. 12 Elyndor•   13 Hexalis•           14 Lumethis•   15 Eastern Is.
- 6              7 Virexal      8 Solmere•            9 Marowik•    10
+ 6              7 Virexal•     8 Solmere•            9 Marowik•    10
  1              2              3 Southern Islands    4              5
 ```
 
 IDs increase west→east within a row and south→north by row
 (`1` = south-west corner, `21` = north-west corner).
-`•` = player-buildable in 1.0 (mirrored by the relay). Note region 10
-is buildable in 1.0 but was not live in EA2; EA2-only regions 3, 7, 11,
-15, 23 are not mirrored.
+`•` = player-buildable in 1.0 (mirrored by the relay). Note region 7
+(Virexal) is buildable in 1.0 as it was in EA2; region 10 is not
+(near-zero upstream activity as of 2026-11-10 — the initial 1.0 cutover
+wrongly mirrored idc-10 instead of idc-7). Only these 9 regions have
+player settlements; the other 16 are empty (reserved for future
+development) and are not mirrored, so the relay serves 10 databases.
 
 | ID | Name (EA2-era) | Module | Buildable in 1.0 |
 |----|------|--------|------------|
@@ -111,10 +114,10 @@ is buildable in 1.0 but was not live in EA2; EA2-only regions 3, 7, 11,
 | 4 | Region 4 | `idc-4` | |
 | 5 | Region 5 | `idc-5` | |
 | 6 | Region 6 | `idc-6` | |
-| 7 | Virexal | `idc-7` | |
+| 7 | Virexal | `idc-7` | yes |
 | 8 | Solmere | `idc-8` | yes |
 | 9 | Marowik | `idc-9` | yes |
-| 10 | Region 10 | `idc-10` | yes |
+| 10 | Region 10 | `idc-10` | |
 | 11 | Western Islands | `idc-11` | |
 | 12 | Elyndor | `idc-12` | yes |
 | 13 | Hexalis | `idc-13` | yes |

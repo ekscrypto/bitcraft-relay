@@ -14,16 +14,17 @@ there is now split between this repo and the Rust fork (see below).
 | Path | What it is |
 |---|---|
 | `www/` | Fleet dashboard (`index.html`), in-browser table browser (`explorer/`), and tutorial site (`tutorial/`). Served by nginx in front of `mirror-health`'s `/health` and the relay-cache HTTP endpoints. |
-| `tools/` | systemd units (`bitcraft-mirror.service`, `mirror-health.service`, `relay-pin-bitcraft-mirror.service`, ram-guard), nginx snippets, and fleet scripts (`check-integrity.sh`, `relay-staleness-monitor.sh`, `wait-cache-ready.sh`, `wait-mirrors-live.sh`, `nginx-flip-bitcraft-mirror.sh`, `relay-pin-pages.sh`). Retired blue-stack units live in `tools/archive/`. |
-| `BITCRAFT.md` | BitCraft server architecture: global → shard discovery, full 25-region grid, developer-token auth, SpacetimeDB v1 protocol. |
-| `PORTS.md` | BitCraft port-allocation scheme (region band `3000 + regionID`, dashboard band `3100 + regionID`, etc.). |
+| `tools/` | systemd units (`bitcraft-mirror.service`, `mirror-health.service`, `relay-pin-bitcraft-mirror.service`, ram-guard), nginx snippets, and fleet scripts (`check-integrity.sh`, `wait-cache-ready.sh`, `wait-mirrors-live.sh`, `relay-pin-pages.sh`). Retired relay-fleet / blue / EA2-era files live in `tools/archive/` (historical only, not a rollback path). |
+| `BITCRAFT.md` | BitCraft server architecture: global → shard discovery, full 25-region grid, developer-token auth, SpacetimeDB v2 upstream protocol (relay clients may use `v2.bsatn` or `v1.bsatn` / `v1.json`). |
+| `PORTS.md` | BitCraft port-allocation scheme (public band `3000 + regionID`; loopback `:3100` mirror, `:3130` status, `:8090` cache). |
 
 ## Where the Rust lives (`../spacetimedb-bitcraft-mirror`)
 
 All Rust — the BitCraft-tuned SpacetimeDB fork, the `relay-cache` read
 cache (columnar stores + HTTP/protobuf API + dim-buildings WebSocket),
 and the `mirror-health` fleet aggregator — lives in the sibling fork
-[`ekscrypto/spacetimedb-bitcraft-mirror`](https://github.com/ekscrypto/spacetimedb-bitcraft-mirror).
+[`ekscrypto/spacetimedb-bitcraft-mirror`](https://github.com/ekscrypto/spacetimedb-bitcraft-mirror)
+(branch `bitcraft-mirror-v2`, the default).
 `relay-cache` consumes `relay-protocol` and
 `spacetimedb-public-mirror-client` from that same workspace, so a
 single checkout is enough:
@@ -47,14 +48,18 @@ and the query/catalogue surface.
   WebSocket on `127.0.0.1:3100` (nginx fans ports 3000–3025 into it),
   status on `:3130`, cache API on `127.0.0.1:8090`.
   `mirror-health.service` polls `:3130` and serves the fleet `/health`
-  JSON on `:8082`. Clients select regions by database name
-  (`idc-global`, `idc-N`, … — 1.0 release fleet).
-- Operator notes (host names, account specifics, deploy IPs) live in
-  `CLAUDE.local.md` / `AGENTS.local.md`, which are gitignored. Copy
-  them in manually when standing up a new host.
-- The `relay-status` ZCode skill under `.zcode/skills/` (also
-  gitignored) reports live production fleet status via SSH; copy it
-  in for operator workstations.
+  JSON on `:8082`. It mirrors 10 databases from the 1.0 release
+  upstream `bitcraft-release.spacetimedb.com`: `idc-global` +
+  `idc-{7,8,9,12,13,14,17,18,19}` (the 9 regions with player
+  settlements; the other 16 of the 25 regions are empty and not
+  mirrored). Clients select a database by name.
+- Operator notes (host/user facts, deploy cautions) live in
+  `AGENTS.local.md` (gitignored; `CLAUDE.local.md` is a symlink to
+  it). Copy it in manually on a new operator workstation.
+- nginx site configs for the production host are kept privately, not
+  in this repo.
+- Live fleet status: the operator-level `relay-status` agent skill
+  (`~/.agents/skills/relay-status/`, not in this repo).
 
 ## License
 

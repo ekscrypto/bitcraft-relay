@@ -1,9 +1,8 @@
 # RAM guard for bitcraft-mirror.service.
 #
 # Stops the one-process mirror when MemAvailable falls below 2 GiB so the
-# warm blue standby (during the cutover soak) and the rest of the host keep
-# headroom. Green binds ports blue never uses, so the only collision risk
-# during overlap is memory — this guard is that backstop.
+# rest of the host (sshd, nginx, mirror-health) keeps headroom instead of
+# the kernel OOM-killing at random — this guard is that backstop.
 [Unit]
 Description=RAM guard for bitcraft-mirror (stop if MemAvailable < 2 GiB)
 After=network-online.target
