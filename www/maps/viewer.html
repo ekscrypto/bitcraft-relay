@@ -188,18 +188,17 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 
   // --- coordinate hover popover ---------------------------------------------
   // Inverts mapgen's Projection (pointy-top small hexes, +z north up) from
-  // canvas px back to region tile coords, then to super-hex N/E — the same
-  // convention as the X-Ray viewer's hover readout.
+  // canvas px back to region tile coords, then to world-tile N/E HUD coords —
+  // the road planner / in-game map convention (HexGrid.smallToNe:
+  // N = round(z/3), E = round(x/3) over WORLD tiles).
 
-  function divFloor(a, b) { return Math.floor(a / b); }
-
-  // odd-r tile → super-hex N/E offset (matches Public/x-ray/xray-core.js)
-  function tileToSuperOffset(x, z) {
-    var q = x - (z - (z & 1)) / 2;
-    var Q = divFloor(q + 1, 3);
-    var N = divFloor(z + 1, 3);
-    return { x: Q + (N - (N & 1)) / 2, z: N };
+  // Region world origin in tiles: BitCraftMap 5×5 grid, id 1 = bottom-left
+  // (matches roads-core region_origin; region 14 = (23040, 15360)).
+  function regionOrigin(id) {
+    var idx = (parseInt(id, 10) || 1) - 1;
+    return { x: (idx % 5) * REGION_SIDE, z: Math.floor(idx / 5) * REGION_SIDE };
   }
+  var origin = regionOrigin(region);
 
   // mapgen's Production-batch projection (px-per-tile 3, 8 px margin) —
   // fallback for SVGs rendered before data-hex-size/-x-off/-y-off existed.
@@ -233,8 +232,9 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       tip.style.display = "none";
       return;
     }
-    var ne = tileToSuperOffset(t.x, t.z);
-    tip.textContent = "N " + ne.z + "  E " + ne.x + "   (x " + t.x + ", z " + t.z + ")";
+    var wx = origin.x + t.x, wz = origin.z + t.z;
+    tip.textContent = "N " + Math.round(wz / 3) + "  E " + Math.round(wx / 3) +
+                      "   (x " + wx + ", z " + wz + ")";
     var tx = e.clientX + 14, ty = e.clientY + 18;
     if (tx + tip.offsetWidth > window.innerWidth - 8) tx = e.clientX - tip.offsetWidth - 14;
     if (ty + tip.offsetHeight > window.innerHeight - 8) ty = e.clientY - tip.offsetHeight - 18;
