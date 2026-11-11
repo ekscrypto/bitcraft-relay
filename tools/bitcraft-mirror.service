@@ -4,7 +4,9 @@
 # fed in-process (--bitcraft-cache), one WS listen, one status sidecar.
 # Upstream moved from Early Access (bitcraft-early-access.spacetimedb.com,
 # bitcraft-live-*) to the official release servers on 2026-11: 1.0 has 9
-# player-buildable regions (8, 9, 10, 12, 13, 14, 17, 18, 19) + global.
+# player-buildable regions (7, 8, 9, 12, 13, 14, 17, 18, 19) + global.
+# Region 10 is not buildable (near-zero upstream activity as of 2026-11-10);
+# the initial 1.0 cutover wrongly mirrored it instead of region 7 (Virexal).
 # The EA2 unit file is archived at tools/archive/bitcraft-mirror.service.ea2.
 #
 # Loopback layout (see bitcraft-relay/PORTS.md):
@@ -38,9 +40,9 @@ ExecStart=/srv/relay/spacetimedb-bitcraft-mirror/target/release/spacetimedb-stan
     --cache-bind 127.0.0.1:8090 \
     --cache-mem-ceiling-bytes 60129542144 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-global \
+    --mirror wss://bitcraft-release.spacetimedb.com/idc-7 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-8 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-9 \
-    --mirror wss://bitcraft-release.spacetimedb.com/idc-10 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-12 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-13 \
     --mirror wss://bitcraft-release.spacetimedb.com/idc-14 \

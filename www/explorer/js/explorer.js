@@ -20,9 +20,9 @@
 
   var FALLBACK_REGIONS = [
     { name: "global", port: 3000, database: "idc-global" },
+    { name: "idc-7", port: 3007, database: "idc-7" },
     { name: "idc-8", port: 3008, database: "idc-8" },
     { name: "idc-9", port: 3009, database: "idc-9" },
-    { name: "idc-10", port: 3010, database: "idc-10" },
     { name: "idc-12", port: 3012, database: "idc-12" },
     { name: "idc-13", port: 3013, database: "idc-13" },
     { name: "idc-14", port: 3014, database: "idc-14" },
