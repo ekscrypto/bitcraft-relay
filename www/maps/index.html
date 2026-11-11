@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Region maps — relay.bitcraftsync.app</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --link: #79c0ff;
+  --code-bg: #0d1117;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 0 0 64px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+a { color: var(--link); }
+a:hover { text-decoration: underline; }
+code, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 0; }
+h1 { font-size: 26px; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; max-width: 72ch; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+  gap: 20px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-bottom: 1px solid var(--border);
+}
+.card .body { padding: 12px 16px 14px; }
+.card h2 { font-size: 17px; margin: 0 0 4px; }
+.card .meta { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.card .links { font-size: 13.5px; margin: 0; }
+.hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+.note {
+  margin: 28px 0 0;
+  padding: 12px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid #d29922;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.foot { color: var(--muted); font-size: 12.5px; margin-top: 32px; }
+.brand { display: block; font-size: 13px; color: var(--muted); text-decoration: none; margin-bottom: 18px; }
+.brand:hover { color: var(--link); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="brand" href="/">&larr; relay.bitcraftsync.app</a>
+  <h1>Region maps</h1>
+  <p class="lede">
+    Vector maps of the nine player-buildable BitCraft regions &mdash; 7, 8,
+    9, 12, 13, 14, 17, 18, 19 &mdash; biome-colored with labels and the
+    superhex grid,
+    generated 2026-11-10 from the relay's roads terrain cache
+    (<code>region.map.pb</code> snapshots). Each region ships as an SVG
+    (primary) and a claims overlay JSON (claim name, centroid
+    <code>cx/cz</code>, small-hex <code>n/e</code> coordinates, tile
+    count).
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <a href="viewer.html?region=7"><img src="region-7-preview.png" alt="Region 7 preview"></a>
+      <div class="body">
+        <h2>Region 7</h2>
+        <p class="meta">11.3 MiB SVG &middot; 372 claims</p>
+        <p class="links"><a href="viewer.html?region=7">Interactive viewer</a> &middot; <a href="region-7.svg">SVG file</a> &middot; <a href="region-7-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=8"><img src="region-8-preview.png" alt="Region 8 preview"></a>
+      <div class="body">
+        <h2>Region 8</h2>
+        <p class="meta">12.6 MiB SVG &middot; 415 claims</p>
+        <p class="links"><a href="viewer.html?region=8">Interactive viewer</a> &middot; <a href="region-8.svg">SVG file</a> &middot; <a href="region-8-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=9"><img src="region-9-preview.png" alt="Region 9 preview"></a>
+      <div class="body">
+        <h2>Region 9</h2>
+        <p class="meta">8.7 MiB SVG &middot; 410 claims</p>
+        <p class="links"><a href="viewer.html?region=9">Interactive viewer</a> &middot; <a href="region-9.svg">SVG file</a> &middot; <a href="region-9-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=12"><img src="region-12-preview.png" alt="Region 12 preview"></a>
+      <div class="body">
+        <h2>Region 12</h2>
+        <p class="meta">11.3 MiB SVG &middot; 476 claims</p>
+        <p class="links"><a href="viewer.html?region=12">Interactive viewer</a> &middot; <a href="region-12.svg">SVG file</a> &middot; <a href="region-12-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=13"><img src="region-13-preview.png" alt="Region 13 preview"></a>
+      <div class="body">
+        <h2>Region 13</h2>
+        <p class="meta">7.6 MiB SVG &middot; 84 claims</p>
+        <p class="links"><a href="viewer.html?region=13">Interactive viewer</a> &middot; <a href="region-13.svg">SVG file</a> &middot; <a href="region-13-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=14"><img src="region-14-preview.png" alt="Region 14 preview"></a>
+      <div class="body">
+        <h2>Region 14</h2>
+        <p class="meta">10.0 MiB SVG &middot; 444 claims</p>
+        <p class="links"><a href="viewer.html?region=14">Interactive viewer</a> &middot; <a href="region-14.svg">SVG file</a> &middot; <a href="region-14-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=17"><img src="region-17-preview.png" alt="Region 17 preview"></a>
+      <div class="body">
+        <h2>Region 17</h2>
+        <p class="meta">12.7 MiB SVG &middot; 467 claims</p>
+        <p class="links"><a href="viewer.html?region=17">Interactive viewer</a> &middot; <a href="region-17.svg">SVG file</a> &middot; <a href="region-17-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=18"><img src="region-18-preview.png" alt="Region 18 preview"></a>
+      <div class="body">
+        <h2>Region 18</h2>
+        <p class="meta">10.0 MiB SVG &middot; 455 claims</p>
+        <p class="links"><a href="viewer.html?region=18">Interactive viewer</a> &middot; <a href="region-18.svg">SVG file</a> &middot; <a href="region-18-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+    <div class="card">
+      <a href="viewer.html?region=19"><img src="region-19-preview.png" alt="Region 19 preview"></a>
+      <div class="body">
+        <h2>Region 19</h2>
+        <p class="meta">10.7 MiB SVG &middot; 441 claims</p>
+        <p class="links"><a href="viewer.html?region=19">Interactive viewer</a> &middot; <a href="region-19.svg">SVG file</a> &middot; <a href="region-19-claims.json">claims.json</a></p>
+        <p class="hint">The SVG scales losslessly — zoom as deep as you like.</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">
+    Claims JSON coordinate note: <code>cx/cz</code> = world small-hex centroid;
+    <code>n = round(z/3)</code>, <code>e = round(x/3)</code>.
+    Regenerated maps replace these files in place (fixed filenames).
+  </p>
+</div>
+</body>
+</html>

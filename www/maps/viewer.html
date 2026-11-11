@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Region map viewer — relay.bitcraftsync.app</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --link: #79c0ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; }
+#stage { position: fixed; inset: 0; overflow: hidden; cursor: grab; background: #183e66; touch-action: none; }
+#stage.panning { cursor: grabbing; }
+#stage svg { display: block; width: 100%; height: 100%; }
+.hud {
+  position: fixed; z-index: 10; display: flex; gap: 8px; align-items: center;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+#topbar { top: 12px; left: 12px; }
+#zoombar { bottom: 12px; right: 12px; }
+.hud a { color: var(--link); text-decoration: none; }
+.hud a:hover { text-decoration: underline; }
+.hud button {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 10px; font-size: 14px; cursor: pointer;
+}
+.hud button:hover { border-color: var(--link); color: var(--link); }
+.hud select {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 6px; font-size: 14px;
+}
+#zoomlabel { min-width: 52px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+#coordtip {
+  position: fixed; z-index: 15; display: none; pointer-events: none;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px;
+  font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+#loading {
+  position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 75%, transparent); color: var(--muted); font-size: 15px;
+}
+#loading[hidden] { display: none; }
+#error { color: #f85149; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div class="hud" id="topbar">
+  <a href="index.html">&larr; Region maps</a>
+  <select id="region"></select>
+  <span id="zoomlabel"></span>
+</div>
+
+<div class="hud" id="zoombar">
+  <button id="zoom-out" title="Zoom out (or mouse wheel / - key)">&minus;</button>
+  <button id="zoom-in" title="Zoom in (or mouse wheel / + key)">+</button>
+  <button id="fit" title="Fit whole region (or 0 key)">Fit</button>
+</div>
+
+<div id="coordtip"></div>
+
+<div id="loading"><span id="loadingtext">Loading&hellip;</span><span id="error" hidden></span></div>
+
+<script>
+(function () {
+  "use strict";
+  var REGIONS = ["7", "8", "9", "12", "13", "14", "17", "18", "19"];
+  var MAX_DEPTH = 60;            // deepest zoom: fit-width / MAX_DEPTH
+  var MIN_FACTOR = 1.4, MAX_FACTOR = 1.6; // button zoom factor per click (eased)
+  var REGION_SIDE = 7680;        // small-hex tiles per region side (odd-r lattice)
+  var SQRT3 = Math.sqrt(3);
+  var stage = document.getElementById("stage");
+  var loading = document.getElementById("loading");
+  var loadingText = document.getElementById("loadingtext");
+  var errorEl = document.getElementById("error");
+  var zoomLabel = document.getElementById("zoomlabel");
+  var select = document.getElementById("region");
+  var svg = null, base = null;   // base = {x,y,w,h} fit view
+  var view = null;               // current {x,y,w,h} in viewBox units
+  var proj = null;               // {size,xOff,yOff} — mapgen Projection params (SVG data-* attrs)
+  var region = REGIONS.indexOf(String(new URLSearchParams(location.search).get("region") || "")) >= 0
+    ? new URLSearchParams(location.search).get("region") : REGIONS[0];
+
+  REGIONS.forEach(function (r) {
+    var o = document.createElement("option");
+    o.value = r; o.textContent = "Region " + r;
+    if (r === region) o.selected = true;
+    select.appendChild(o);
+  });
+  select.addEventListener("change", function () {
+    location.search = "?region=" + select.value;
+  });
+
+  function apply() {
+    if (!svg || !view) return;
+    svg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
+    var depth = base.w / view.w;   // 1 = fit, MAX_DEPTH = deepest
+    zoomLabel.textContent = Math.round(depth * 100) + "%";
+    document.getElementById("zoom-in").disabled = depth >= MAX_DEPTH - 0.01;
+    document.getElementById("zoom-out").disabled = depth <= 1.0001;
+  }
+
+  function fit() {
+    if (!base) return;
+    view = { x: base.x, y: base.y, w: base.w, h: base.h };
+    apply();
+  }
+
+  function fitSize() {           // visible viewBox size when fully zoomed out
+    return { w: base.w, h: base.h };  // NOT svg.viewBox — apply() mutates it on every zoom
+  }
+
+  // map a screen point (relative to stage) to viewBox coords
+  function toWorld(px, py) {
+    var rect = stage.getBoundingClientRect();
+    var vb = svg.viewBox.baseVal;
+    var s = Math.min(rect.width / view.w, rect.height / view.h);
+    var ox = (rect.width - view.w * s) / 2, oy = (rect.height - view.h * s) / 2;
+    return { x: view.x + (px - ox) / s, y: view.y + (py - oy) / s, s: s };
+  }
+
+  function zoomAt(px, py, factor) {
+    var rect = stage.getBoundingClientRect();
+    var min = fitSize();
+    var minW = min.w / MAX_DEPTH;
+    var maxW = min.w;
+    var p = toWorld(px, py);
+    var nw = Math.min(maxW, Math.max(minW, view.w / factor));
+    var k = nw / view.w;
+    view.x = p.x - (p.x - view.x) * k;
+    view.y = p.y - (p.y - view.y) * k;
+    view.w = nw; view.h = view.h * k;
+    apply();
+  }
+
+  function zoomCenter(factor) {
+    var rect = stage.getBoundingClientRect();
+    zoomAt(rect.width / 2, rect.height / 2, factor);
+  }
+
+  document.getElementById("zoom-in").addEventListener("click", function () { zoomCenter(1.5); });
+  document.getElementById("zoom-out").addEventListener("click", function () { zoomCenter(1 / 1.5); });
+  document.getElementById("fit").addEventListener("click", fit);
+
+  stage.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var rect = stage.getBoundingClientRect();
+    zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * 0.0015));
+  }, { passive: false });
+
+  var drag = null;
+  stage.addEventListener("pointerdown", function (e) {
+    drag = { x: e.clientX, y: e.clientY };
+    stage.classList.add("panning");
+    stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener("pointermove", function (e) {
+    if (!drag || !svg) return;
+    var rect = stage.getBoundingClientRect();
+    var s = Math.min(rect.width / view.w, rect.height / view.h);
+    view.x -= (e.clientX - drag.x) / s;
+    view.y -= (e.clientY - drag.y) / s;
+    drag = { x: e.clientX, y: e.clientY };
+    apply();
+  });
+  stage.addEventListener("pointerup", function () { drag = null; stage.classList.remove("panning"); });
+  stage.addEventListener("pointercancel", function () { drag = null; stage.classList.remove("panning"); });
+  stage.addEventListener("dblclick", function (e) {
+    var rect = stage.getBoundingClientRect();
+    zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "+" || e.key === "=") zoomCenter(1.5);
+    else if (e.key === "-" || e.key === "_") zoomCenter(1 / 1.5);
+    else if (e.key === "0") fit();
+  });
+
+  // --- coordinate hover popover ---------------------------------------------
+  // Inverts mapgen's Projection (pointy-top small hexes, +z north up) from
+  // canvas px back to region tile coords, then to super-hex N/E — the same
+  // convention as the X-Ray viewer's hover readout.
+
+  function divFloor(a, b) { return Math.floor(a / b); }
+
+  // odd-r tile → super-hex N/E offset (matches Public/x-ray/xray-core.js)
+  function tileToSuperOffset(x, z) {
+    var q = x - (z - (z & 1)) / 2;
+    var Q = divFloor(q + 1, 3);
+    var N = divFloor(z + 1, 3);
+    return { x: Q + (N - (N & 1)) / 2, z: N };
+  }
+
+  // mapgen's Production-batch projection (px-per-tile 3, 8 px margin) —
+  // fallback for SVGs rendered before data-hex-size/-x-off/-y-off existed.
+  function defaultProj() {
+    var size = 3 / SQRT3;
+    return { size: size, xOff: size + 8, yOff: size + 8 + 1.5 * size * (REGION_SIDE - 1) };
+  }
+
+  // canvas px → nearest odd-r tile (port of mapgen Projection::pixel_to_hex)
+  function pixelToTile(px, py) {
+    var wx = (px - proj.xOff) / proj.size;
+    var wy = (py - proj.yOff) / proj.size;
+    var r = -wy / 1.5;
+    var q = (wx - SQRT3 / 2 * r) / SQRT3;
+    var s = -q - r;
+    var rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+    var dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s);
+    if (dq > dr && dq > ds) rq = -rr - rs;
+    else if (dr > ds) rr = -rq - rs;
+    return { x: rq + (rr - (rr & 1)) / 2, z: rr };   // axial → odd-r offset
+  }
+
+  var tip = document.getElementById("coordtip");
+
+  stage.addEventListener("pointermove", function (e) {
+    if (!svg || !view || !proj || e.pointerType === "touch") return;
+    var rect = stage.getBoundingClientRect();
+    var p = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    var t = pixelToTile(p.x, p.y);
+    if (t.x < 0 || t.x >= REGION_SIDE || t.z < 0 || t.z >= REGION_SIDE) {
+      tip.style.display = "none";
+      return;
+    }
+    var ne = tileToSuperOffset(t.x, t.z);
+    tip.textContent = "N " + ne.z + "  E " + ne.x + "   (x " + t.x + ", z " + t.z + ")";
+    var tx = e.clientX + 14, ty = e.clientY + 18;
+    if (tx + tip.offsetWidth > window.innerWidth - 8) tx = e.clientX - tip.offsetWidth - 14;
+    if (ty + tip.offsetHeight > window.innerHeight - 8) ty = e.clientY - tip.offsetHeight - 18;
+    tip.style.left = tx + "px";
+    tip.style.top = ty + "px";
+    tip.style.display = "block";
+  });
+  stage.addEventListener("pointerleave", function () { tip.style.display = "none"; });
+
+  function fail(msg) {
+    loadingText.hidden = true;
+    errorEl.hidden = false;
+    errorEl.textContent = msg;
+  }
+
+  function load(r) {
+    loading.hidden = false;
+    loadingText.hidden = false;
+    errorEl.hidden = true;
+    loadingText.textContent = "Loading region " + r + " (~8\u201313 MB, may take a few seconds)\u2026";
+    svg = null; base = null; view = null; proj = null;
+    fetch("region-" + r + ".svg", { cache: "no-cache" })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
+      .then(function (text) {
+        var doc = new DOMParser().parseFromString(text, "image/svg+xml");
+        var root = doc.documentElement;
+        if (!root || root.nodeName === "parsererror") throw new Error("failed to parse SVG");
+        root.removeAttribute("width");
+        root.removeAttribute("height");
+        stage.innerHTML = "";
+        svg = document.importNode(root, true);
+        stage.appendChild(svg);
+        proj = {
+          size: parseFloat(svg.getAttribute("data-hex-size")),
+          xOff: parseFloat(svg.getAttribute("data-x-off")),
+          yOff: parseFloat(svg.getAttribute("data-y-off"))
+        };
+        if (!isFinite(proj.size) || proj.size <= 0 ||
+            !isFinite(proj.xOff) || !isFinite(proj.yOff)) proj = defaultProj();
+        var vb = svg.viewBox.baseVal;
+        base = { x: vb.x, y: vb.y, w: vb.width, h: vb.height };
+        fit();
+        loading.hidden = true;
+      })
+      .catch(function (err) { fail("Could not load region-" + r + ".svg \u2014 " + err.message); });
+  }
+
+  document.title = "Region " + region + " map \u2014 relay.bitcraftsync.app";
+  load(region);
+})();
+</script>
+</body>
+</html>
