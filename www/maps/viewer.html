@@ -100,7 +100,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <span id="wtstatus"></span>
   <label id="mineslabel" title="Mining caves, marked by ore tier (T1 Ferralith … T10 Astralite)"><input type="checkbox" id="minesbox"> Mine tiers</label>
   <span id="minesstatus"></span>
-  <label id="roadslabel" title="Player-built roads (paving outside settlements); zoom in to also see paving inside claims"><input type="checkbox" id="roadsbox"> Roads</label>
+  <label id="roadslabel" title="Player-built roads (paving outside settlements) and river crossings (platforms, in orange); zoom in to also see paving inside claims"><input type="checkbox" id="roadsbox"> Roads</label>
   <span id="roadsstatus"></span>
 </div>
 
@@ -1089,6 +1089,10 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   //                     bit 7 = inside a claim. Fetched for the visible area
   //                     once zoomed in; this is where paving inside
   //                     settlements appears.
+  // Crossings are river/ocean platform buildings (manifest types with
+  // `crossing`): one super hex each, no paving on them. They draw in their
+  // own colour at every zoom, inside claims too, so bridged rivers are not
+  // gaps in the network.
 
   var ROAD_BLOCK = 768;          // small hexes per detail block side
   var ROAD_DETAIL_PX = 2.5;      // small-hex width (device px) above which detail blocks draw
@@ -1098,6 +1102,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var ROAD_REFRESH_MS = 5 * 60 * 1000;
   var ROAD_FALLBACK = "#3d526b"; // untiered / unknown paving (X-Ray convention)
   var ROAD_HALO = "rgba(16,20,24,0.8)";
+  var CROSSING_COLOR = "#f0a63a"; // platform planks: warm, reads on water and land
+  var CROSSING_DOT_PX = 9;       // marker diameter (device px) while platforms are smaller than this
   var roadsCanvas = document.getElementById("roads");
   var roadsBox = document.getElementById("roadsbox");
   var roadsStatus = document.getElementById("roadsstatus");
@@ -1122,8 +1128,14 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   function roadsDir() { return "region-" + region + "-roads/"; }
 
   function buildRoads(m, ov) {
-    var color = [], label = [], tier = new Int8Array(128);
+    var color = [], label = [], tier = new Int8Array(128), crossing = new Uint8Array(128);
     (m.types || []).forEach(function (t) {
+      if (t.crossing) {
+        // Crossings outrank every paving tier when cells are pooled.
+        crossing[t.code] = 1; tier[t.code] = 100;
+        color[t.code] = CROSSING_COLOR; label[t.code] = t.name;
+        return;
+      }
       tier[t.code] = t.tier;
       color[t.code] = TIER_COLORS[t.tier] || ROAD_FALLBACK;
       label[t.code] = (t.tier > 0 ? "T" + t.tier + " " : "") + t.name;
@@ -1135,7 +1147,9 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     for (i = 0, n = 0; i < ov.length; i++) if (ov[i]) idx[n++] = i;
     var has = new Set();
     (m.blocks || []).forEach(function (b) { has.add(b[0] + "_" + b[1]); });
-    return { man: m, ov: ov, ovIdx: idx, color: color, label: label, tier: tier, has: has, blocks: new Map(), lv: [] };
+    var cross = [];              // super cells holding a crossing platform
+    for (i = 0; i < idx.length; i++) if (crossing[ov[idx[i]]]) cross.push(idx[i]);
+    return { man: m, ov: ov, ovIdx: idx, color: color, label: label, tier: tier, crossing: crossing, cross: cross, has: has, blocks: new Map(), lv: [] };
   }
 
   function loadRoads() {
@@ -1282,7 +1296,9 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
             if (!v) continue;
             var x2 = x;
             while (x2 < xb && data[row + x2 + 1] === v) x2++;
-            var set = (v & 128) ? claim : road, c = v & 127;
+            var c = v & 127;
+            // Crossings always draw at full strength, claimed or not.
+            var set = ((v & 128) && !roads.crossing[c]) ? claim : road;
             (set[c] || (set[c] = [])).push(shift + W * x, cy, x2 - x + 1);
             x = x2;
           }
@@ -1339,6 +1355,25 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     return complete;
   }
 
+  // A crossing is one super hex per platform: a speck when zoomed out. Until
+  // platforms are a few pixels wide, mark each with a fixed-size dot.
+  function drawCrossingMarkers(g, vis, k) {
+    var R = proj.size * 3, W = SQRT3 * R, H = 1.5 * R;
+    if (W * k >= CROSSING_DOT_PX * 2 || !roads.cross.length) return;
+    var r = CROSSING_DOT_PX / 2 / k;
+    g.fillStyle = CROSSING_COLOR; g.strokeStyle = ROAD_HALO; g.lineWidth = 1.2 / k;
+    g.beginPath();
+    for (var i = 0; i < roads.cross.length; i++) {
+      var n = roads.cross[i], sx = n % SUPER_SIDE, sz = (n / SUPER_SIDE) | 0;
+      var cx = proj.xOff + W * (sx + ((sz & 1) ? 0.5 : 0)), cy = proj.yOff - H * sz;
+      if (cx < vis.x0 - r || cx > vis.x1 + r || cy < vis.y0 - r || cy > vis.y1 + r) continue;
+      g.moveTo(cx + r, cy);
+      g.arc(cx, cy, r, 0, 2 * Math.PI);
+    }
+    g.fill();
+    g.stroke();
+  }
+
   function drawRoads() {
     var L = committed ? layout(committed) : null;
     var dpr = window.devicePixelRatio || 1;
@@ -1359,6 +1394,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     g.setTransform(k, 0, 0, k, (L.ox - v.x * L.s) * dpr, (L.oy - v.y * L.s) * dpr);
     if (SQRT3 * proj.size * k >= ROAD_DETAIL_PX) drawRoadDetail(g, vis, k);
     else drawRoadOverview(g, vis, k);
+    drawCrossingMarkers(g, vis, k);
   }
 
   function setRoadsStatus() {
@@ -1367,9 +1403,12 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     if (roadsState === "loading") { roadsStatus.textContent = "loading…"; return; }
     if (roadsState === "missing" || !roads) { roadsStatus.textContent = "not available"; return; }
     var c = roads.man.counts || {};
-    var total = (c.road || 0) + (c.claim || 0) + (c.stray || 0);
-    roadsStatus.textContent = total ? (c.road || 0).toLocaleString() + " road tiles" : "no paving yet";
+    var total = (c.road || 0) + (c.claim || 0) + (c.stray || 0) + (c.platforms || 0);
+    roadsStatus.textContent = total
+      ? (c.road || 0).toLocaleString() + " road tiles" + (c.crossings ? " · " + c.crossings + " crossings" : "")
+      : "no paving yet";
     roadsStatus.title = (c.road || 0).toLocaleString() + " road tiles outside claims\n" +
+      (c.crossings || 0).toLocaleString() + " river/ocean crossings (" + (c.platforms || 0).toLocaleString() + " platforms)\n" +
       (c.claim || 0).toLocaleString() + " paved tiles inside claims (zoom in)\n" +
       (c.stray || 0).toLocaleString() + " in small isolated patches (zoom in)\n" +
       "Updated " + new Date(roads.man.generatedAt).toLocaleString() +
@@ -1401,11 +1440,13 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       var data = roads.blocks.get(bx + "_" + bz);
       if (data instanceof Uint8Array) {
         var v = data[(t.z - bz * ROAD_BLOCK) * ROAD_BLOCK + (t.x - bx * ROAD_BLOCK)];
-        return v ? (roads.label[v & 127] || "Paving") + ((v & 128) ? " · inside a claim" : "") : null;
+        if (!v) return null;
+        return (roads.crossing[v & 127] ? "Crossing · " : "") + (roads.label[v & 127] || "Paving") +
+               ((v & 128) ? " · inside a claim" : "");
       }
     }
     var o = roads.ov[c.z * SUPER_SIDE + c.x];
-    return o ? "Road · " + (roads.label[o] || "Paving") : null;
+    return o ? (roads.crossing[o] ? "Crossing · " : "Road · ") + (roads.label[o] || "Paving") : null;
   }
 
   // --- coordinate hover popover ---------------------------------------------

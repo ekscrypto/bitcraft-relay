@@ -2,8 +2,10 @@
 #
 # roadsgen (bitcraft-calculator-httpd repo, Sources/bitcraft-roadd) reads each
 # region's paving grid from the embedded roads cache on loopback and writes
-# the compact region-N-roads/ file sets the viewer draws. Regions whose
-# snapshot is unchanged are skipped (ETag / 304). Triggered by
+# the compact region-N-roads/ file sets the viewer draws. River/ocean
+# platform buildings (crossings) come from the mirror itself (--mirror-ws,
+# one short v1.json subscription per region). Regions whose snapshot and
+# platforms are both unchanged are skipped (ETag / 304). Triggered by
 # relay-roadsgen.timer; a oneshot unit never overlaps itself.
 #
 # Peak memory is about one region snapshot (~370 MB measured); the caps keep a
@@ -18,6 +20,7 @@ User=relay
 Group=relay
 ExecStart=/srv/relay/bin/roadsgen \
     --relay http://127.0.0.1:8090 \
+    --mirror-ws ws://127.0.0.1:3100 \
     --regions 7,8,9,12,13,14,17,18,19 \
     --out /srv/relay/bitcraft-relay/www/maps
 Nice=10
