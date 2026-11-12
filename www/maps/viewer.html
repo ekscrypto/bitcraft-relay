@@ -27,8 +27,9 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 #preview { z-index: 0; }
 #raster { z-index: 1; }
 #vector { z-index: 2; }
-#grid { z-index: 3; }
-#labels { z-index: 4; }
+#watch { z-index: 3; }
+#grid { z-index: 4; }
+#labels { z-index: 5; }
 #raster img, #vector img, #preview { position: absolute; display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
 #raster img { image-rendering: auto; }
 #labels { width: 100%; height: 100%; overflow: visible; }
@@ -37,7 +38,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   background: color-mix(in srgb, var(--panel) 88%, transparent);
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
 }
-#topbar { top: 12px; left: 12px; }
+#topbar { top: 12px; left: 12px; flex-wrap: wrap; max-width: calc(100vw - 24px); }
 #zoombar { bottom: 12px; right: 12px; }
 .hud a { color: var(--link); text-decoration: none; }
 .hud a:hover { text-decoration: underline; }
@@ -50,13 +51,17 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   background: var(--panel); color: var(--text); border: 1px solid var(--border);
   border-radius: 4px; padding: 4px 6px; font-size: 14px;
 }
+.hud label { display: flex; gap: 5px; align-items: center; cursor: pointer; user-select: none; }
+.hud label.disabled { color: var(--muted); cursor: not-allowed; }
+#wtstatus { color: var(--muted); font-size: 13px; }
+#wtstatus:empty { display: none; }
 #zoomlabel { min-width: 52px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 #download[hidden] { display: none; }
 #coordtip {
   position: fixed; z-index: 15; display: none; pointer-events: none;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px;
-  font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  font-size: 13px; font-variant-numeric: tabular-nums; white-space: pre;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 #loading {
@@ -72,6 +77,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <div id="layer">
     <div id="raster"></div>
     <div id="vector"></div>
+    <canvas id="watch"></canvas>
     <canvas id="grid"></canvas>
     <svg id="labels" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
@@ -82,6 +88,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <select id="region"></select>
   <span id="zoomlabel"></span>
   <a id="download" hidden download>SVG &darr;</a>
+  <label id="wtlabel" title="Empire watchtowers and the chunks each one covers"><input type="checkbox" id="wt"> Watchtowers</label>
+  <span id="wtstatus"></span>
 </div>
 
 <div class="hud" id="zoombar">
@@ -135,6 +143,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var rafId = 0, commitTimer = 0;
 
   var params = new URLSearchParams(location.search);
+  var wtOn = params.get("watchtowers") === "1";
   var region = REGIONS.indexOf(String(params.get("region") || "")) >= 0 ? params.get("region") : REGIONS[0];
 
   REGIONS.forEach(function (r) {
@@ -144,7 +153,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     select.appendChild(o);
   });
   select.addEventListener("change", function () {
-    location.search = "?region=" + select.value;
+    location.search = "?region=" + select.value + (wtOn ? "&watchtowers=1" : "");
   });
 
   function dir() { return "region-" + region + "/"; }
@@ -351,6 +360,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     layoutRaster(L, visibleRect(L, 64));
     layoutVector(L, visibleRect(L, 32));
     drawGrid(L, vis);
+    drawWatch();
     labelsSvg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
     labelsSvg.style.width = L.sw + "px"; labelsSvg.style.height = L.sh + "px";
     if (preview) {
@@ -439,6 +449,252 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     else if (e.key === "0") fit();
   });
 
+  // --- empire watchtower layer -----------------------------------------------
+  // Data: region-N-watchtowers.json from mapgen (empire_node_state +
+  // empire_chunk_state). A tower covers whole terrain chunks: 32×32 super-hex
+  // cells of the odd-r super lattice, region-local chunk (cx, cz) = super
+  // (sx >> 5, sz >> 5). Chunk outlines are drawn exactly (staircase of
+  // super-hex edges) when super hexes are big enough to see, else as the
+  // equal-area rectangle that tiles seamlessly.
+
+  var CHUNK = 32, CHUNKS_SIDE = 80;
+  var WT_EXACT_PX = 3;           // super-hex width (device px) above which outlines are exact
+  var watchCanvas = document.getElementById("watch");
+  var wtBox = document.getElementById("wt");
+  var wtLabel = document.getElementById("wtlabel");
+  var wtStatus = document.getElementById("wtstatus");
+  var wt = null;                 // parsed layer data
+  var wtState = "idle";          // idle | loading | ready | missing
+  var wtHover = -1;              // hovered tower index (territory highlight)
+  var wtShape = null;            // per-hexSize template {sides:[S,E,N,W], rect:[S,E,N,W]}
+
+  function hashHue(id) {
+    var h = 0;
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return h % 360;
+  }
+
+  function parseWatch(d) {
+    var owner = new Int32Array(CHUNKS_SIDE * CHUNKS_SIDE).fill(-1);
+    var byTower = d.towers.map(function () { return []; });
+    d.chunks.forEach(function (c) {
+      if (c[0] < 0 || c[0] >= CHUNKS_SIDE || c[1] < 0 || c[1] >= CHUNKS_SIDE) return;
+      owner[c[1] * CHUNKS_SIDE + c[0]] = c[2];
+      byTower[c[2]].push(c[1] * CHUNKS_SIDE + c[0]);
+    });
+    // Empires without an emblem color (NPC) get a hue that never collides
+    // with the biome/paving palette (no greens, browns, tans or grays).
+    var FALLBACK = ["#29d3f0", "#b46cff", "#ff5a36", "#ff4fa3"];   // "131" (Fallen Empire) → magenta
+    var colors = d.empires.map(function (e) {
+      return e.color || FALLBACK[hashHue(e.id) % FALLBACK.length];
+    });
+    return { d: d, owner: owner, byTower: byTower, colors: colors };
+  }
+
+  function ownerAt(cx, cz) {
+    if (cx < 0 || cx >= CHUNKS_SIDE || cz < 0 || cz >= CHUNKS_SIDE) return -1;
+    return wt.owner[cz * CHUNKS_SIDE + cx];
+  }
+
+  // Chunk outline template relative to the center of the chunk's first super
+  // hex (sx0, sz0) — every chunk starts on an even super row, so all chunks
+  // are translations of one shape. Sides run S (west→east), E (south→north),
+  // N (east→west), W (north→south); concatenated they close the polygon.
+  function buildShape() {
+    var R = proj.size * 3, W = SQRT3 * R;
+    function corner(i, j, deg) {
+      var t = deg * Math.PI / 180;
+      return [W * i + ((j & 1) ? W / 2 : 0) + R * Math.cos(t), -1.5 * R * j + R * Math.sin(t)];
+    }
+    var S = [], E = [], N = [], Wst = [], i, j;
+    for (i = 0; i < CHUNK; i++) S.push(corner(i, 0, 150), corner(i, 0, 90), corner(i, 0, 30));
+    for (j = 0; j < CHUNK; j++) E.push(corner(CHUNK - 1, j, 30), corner(CHUNK - 1, j, -30));
+    for (i = CHUNK - 1; i >= 0; i--) N.push(corner(i, CHUNK - 1, -30), corner(i, CHUNK - 1, -90), corner(i, CHUNK - 1, 210));
+    for (j = CHUNK - 1; j >= 0; j--) Wst.push(corner(0, j, 210), corner(0, j, 150));
+    // Equal-area rectangle: zigzag edges averaged (chunks tile it seamlessly).
+    var l = -W / 4, r = W * (CHUNK - 1) + 3 * W / 4;
+    var b = 0.75 * R, t = -1.5 * R * (CHUNK - 1) - 0.75 * R;
+    return {
+      size: proj.size,
+      sides: [S, E, N, Wst],
+      rect: [[[l, b], [r, b]], [[r, b], [r, t]], [[r, t], [l, t]], [[l, t], [l, b]]],
+      bbox: { l: l, r: r, b: b, t: t }
+    };
+  }
+
+  function chunkOrigin(cx, cz) {
+    var R = proj.size * 3;
+    return [proj.xOff + SQRT3 * R * CHUNK * cx, proj.yOff - 1.5 * R * CHUNK * cz];
+  }
+
+  function tileCenter(x, z) {
+    var q = x - (z - (z & 1)) / 2;
+    return [proj.xOff + proj.size * (SQRT3 * q + SQRT3 / 2 * z), proj.yOff - proj.size * 1.5 * z];
+  }
+
+  function drawWatch() {
+    var L = committed ? layout(committed) : null;
+    var dpr = window.devicePixelRatio || 1;
+    var cw = L ? Math.round(L.sw * dpr) : 0, ch = L ? Math.round(L.sh * dpr) : 0;
+    if (watchCanvas.width !== cw || watchCanvas.height !== ch) {
+      watchCanvas.width = cw; watchCanvas.height = ch;
+      if (L) { watchCanvas.style.width = L.sw + "px"; watchCanvas.style.height = L.sh + "px"; }
+    }
+    var g = watchCanvas.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    if (!wtOn || !wt || !L) return;
+    if (!wtShape || wtShape.size !== proj.size) wtShape = buildShape();
+    var v = committed, k = L.s * dpr;
+    var exact = SQRT3 * proj.size * 3 * k >= WT_EXACT_PX;
+    var sides = exact ? wtShape.sides : wtShape.rect;
+    var bb = wtShape.bbox;
+    // visible canvas rect (stage incl. letterbox)
+    var x0 = v.x - L.ox / L.s, y0 = v.y - L.oy / L.s;
+    var x1 = v.x + (L.sw - L.ox) / L.s, y1 = v.y + (L.sh - L.oy) / L.s;
+    function visible(o) {
+      return !(o[0] + bb.r < x0 || o[0] + bb.l > x1 || o[1] + bb.b < y0 || o[1] + bb.t > y1);
+    }
+    function trace(o, side, move) {
+      for (var i = 0; i < side.length; i++) {
+        var p = side[i];
+        if (i === 0 && move) g.moveTo(o[0] + p[0], o[1] + p[1]);
+        else g.lineTo(o[0] + p[0], o[1] + p[1]);
+      }
+    }
+    g.setTransform(k, 0, 0, k, (L.ox - v.x * L.s) * dpr, (L.oy - v.y * L.s) * dpr);
+    g.lineJoin = "round";
+
+    var towers = wt.d.towers;
+    // fills, one path per tower
+    for (var t = 0; t < towers.length; t++) {
+      var list = wt.byTower[t];
+      if (!list.length) continue;
+      g.beginPath();
+      var any = false;
+      for (var n = 0; n < list.length; n++) {
+        var cx = list[n] % CHUNKS_SIDE, cz = (list[n] / CHUNKS_SIDE) | 0;
+        var o = chunkOrigin(cx, cz);
+        if (!visible(o)) continue;
+        any = true;
+        trace(o, sides[0], true); trace(o, sides[1], false);
+        trace(o, sides[2], false); trace(o, sides[3], false);
+        g.closePath();
+      }
+      if (!any) continue;
+      g.fillStyle = wt.colors[towers[t].empire];
+      g.globalAlpha = t === wtHover ? 0.4 : 0.15;
+      g.fill();
+    }
+    g.globalAlpha = 1;
+
+    // borders: tower ↔ tower thin, empire edge (vs unclaimed / other empire) thick
+    var nb = [[0, -1], [1, 0], [0, 1], [-1, 0]];   // S, E, N, W neighbours
+    var thin = new Map(), thick = new Map();
+    function bucket(m, key) { var a = m.get(key); if (!a) { a = []; m.set(key, a); } return a; }
+    for (var cz2 = 0; cz2 < CHUNKS_SIDE; cz2++) {
+      for (var cx2 = 0; cx2 < CHUNKS_SIDE; cx2++) {
+        var own = ownerAt(cx2, cz2);
+        if (own < 0) continue;
+        var o2 = chunkOrigin(cx2, cz2);
+        if (!visible(o2)) continue;
+        var emp = towers[own].empire;
+        for (var s = 0; s < 4; s++) {
+          var other = ownerAt(cx2 + nb[s][0], cz2 + nb[s][1]);
+          if (other === own) continue;
+          var sameEmpire = other >= 0 && towers[other].empire === emp;
+          bucket(sameEmpire ? thin : thick, emp).push(o2[0], o2[1], s);
+        }
+      }
+    }
+    function strokeSides(m, px, alpha) {
+      m.forEach(function (arr, emp) {
+        g.beginPath();
+        for (var i = 0; i < arr.length; i += 3) trace([arr[i], arr[i + 1]], sides[arr[i + 2]], true);
+        g.strokeStyle = wt.colors[emp];
+        g.globalAlpha = alpha;
+        g.lineWidth = px * dpr / k;
+        g.stroke();
+      });
+    }
+    strokeSides(thin, 1, 0.7);
+    strokeSides(thick, 2.5, 0.95);
+    g.globalAlpha = 1;
+
+    // tower markers, constant screen size
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    var rad = 5.5 * dpr;
+    towers.forEach(function (tw, idx) {
+      var c = tileCenter(tw.x, tw.z);
+      var sx = (L.ox + (c[0] - v.x) * L.s) * dpr, sy = (L.oy + (c[1] - v.y) * L.s) * dpr;
+      if (sx < -rad || sy < -rad || sx > cw + rad || sy > ch + rad) return;
+      g.beginPath();
+      g.moveTo(sx, sy - rad * 1.25);
+      g.lineTo(sx + rad, sy);
+      g.lineTo(sx, sy + rad * 1.25);
+      g.lineTo(sx - rad, sy);
+      g.closePath();
+      g.fillStyle = tw.active ? wt.colors[tw.empire] : "#101418";
+      g.fill();
+      g.lineWidth = (idx === wtHover ? 2.5 : 1.5) * dpr;
+      g.strokeStyle = idx === wtHover ? "#ffffff" : "#101418";
+      g.stroke();
+    });
+  }
+
+  function fmtAgo(sec) {
+    var d = Math.max(0, Date.now() / 1000 - sec);
+    if (d < 90) return "just now";
+    if (d < 5400) return Math.round(d / 60) + " min ago";
+    if (d < 129600) return Math.round(d / 3600) + " h ago";
+    return Math.round(d / 86400) + " d ago";
+  }
+
+  function setWatchStatus() {
+    if (!wtOn) { wtStatus.textContent = ""; return; }
+    if (wtState === "loading") { wtStatus.textContent = "loading…"; return; }
+    if (wtState === "missing") { wtStatus.textContent = "not available for this region"; return; }
+    if (!wt) { wtStatus.textContent = ""; return; }
+    var inside = wt.d.towers.filter(function (t) { return t.inside; }).length;
+    var names = wt.d.empires.map(function (e) { return e.name || ("Empire " + e.id); });
+    wtStatus.textContent = inside + " towers · " + names.join(", ") + " · " + fmtAgo(wt.d.fetchedAt);
+    wtStatus.title = "Watchtower data fetched " + new Date(wt.d.fetchedAt * 1000).toLocaleString();
+  }
+
+  function loadWatch() {
+    if (wtState !== "idle") return;
+    wtState = "loading";
+    setWatchStatus();
+    fetch("region-" + region + "-watchtowers.json", { cache: "no-cache" })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+      .then(function (d) { wt = parseWatch(d); wtState = "ready"; setWatchStatus(); drawWatch(); })
+      .catch(function () { wtState = "missing"; setWatchStatus(); });
+  }
+
+  function setWatch(on) {
+    wtOn = on;
+    wtBox.checked = on;
+    var p = new URLSearchParams(location.search);
+    if (on) p.set("watchtowers", "1"); else p.delete("watchtowers");
+    history.replaceState(null, "", "?" + p.toString());
+    if (on) loadWatch();
+    setWatchStatus();
+    drawWatch();
+  }
+  wtBox.addEventListener("change", function () { setWatch(wtBox.checked); });
+
+  // Hover: which tower covers the super cell under the cursor.
+  function watchInfoAt(superCell) {
+    if (!wtOn || !wt) return null;
+    var ti = ownerAt(superCell.x >> 5, superCell.z >> 5);
+    if (ti !== wtHover) { wtHover = ti; if (!drag) drawWatch(); }
+    if (ti < 0) return null;
+    var tw = wt.d.towers[ti], em = wt.d.empires[tw.empire];
+    return "Watchtower N " + tw.n + "  E " + tw.e + " · " + (em.name || "Empire " + em.id) +
+           "\nenergy " + tw.energy + " · upkeep " + tw.upkeep + " · " + tw.chunks + " chunks" +
+           (tw.active ? "" : " · inactive");
+  }
+
   // --- coordinate hover popover ---------------------------------------------
   // Inverts mapgen's Projection (pointy-top small hexes, +z north up) from
   // canvas px back to region tile coords, then to world-tile N/E HUD coords —
@@ -483,11 +739,13 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     var t = pixelToTile(p.x, p.y);
     if (c.x < 0 || c.x >= SUPER_SIDE || c.z < 0 || c.z >= SUPER_SIDE) {
       tip.style.display = "none";
+      watchInfoAt({ x: -1, z: -1 });
       return;
     }
     var wx = origin.x + t.x, wz = origin.z + t.z;
+    var info = watchInfoAt(c);
     tip.textContent = "N " + Math.round(wz / 3) + "  E " + Math.round(wx / 3) +
-                      "   (x " + wx + ", z " + wz + ")";
+                      "   (x " + wx + ", z " + wz + ")" + (info ? "\n" + info : "");
     var tx = e.clientX + 14, ty = e.clientY + 18;
     if (tx + tip.offsetWidth > window.innerWidth - 8) tx = e.clientX - tip.offsetWidth - 14;
     if (ty + tip.offsetHeight > window.innerHeight - 8) ty = e.clientY - tip.offsetHeight - 18;
@@ -495,7 +753,10 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     tip.style.top = ty + "px";
     tip.style.display = "block";
   });
-  stage.addEventListener("pointerleave", function () { tip.style.display = "none"; });
+  stage.addEventListener("pointerleave", function () {
+    tip.style.display = "none";
+    if (wtHover >= 0) { wtHover = -1; drawWatch(); }
+  });
 
   // --- load -----------------------------------------------------------------
 
@@ -531,6 +792,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         buildLabels();
         fit();
         loading.hidden = true;
+        if (wtOn) setWatch(true);
       })
       .catch(function (err) { fail("Could not load region " + region + " tiles — " + err.message); });
   }
