@@ -467,11 +467,151 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var wtState = "idle";          // idle | loading | ready | missing
   var wtHover = -1;              // hovered tower index (territory highlight)
   var wtShape = null;            // per-hexSize template {sides:[S,E,N,W], rect:[S,E,N,W]}
+  var wtMarkers = [];            // last drawn markers [{cx, cy (canvas units), ref}] for hover
+  var MARKER_HOVER_PX = 9;
+
+  // Live tower state: mapgen's JSON only has geometry (positions + covered
+  // chunks); energy / upkeep / active stream from empire_node_state on the
+  // region's own mirror while the layer is on.
+  var LIVE_HOST = "relay.bitcraftsync.app";
+  var live = {
+    ws: null, state: "off",      // off | connecting | live | reconnecting
+    rows: new Map(),             // entity_id (string) → {id, empire, x, z, dim, energy, upkeep, active}
+    ready: false,                // InitialSubscription received on this connection
+    retry: 0, timer: 0, raf: 0
+  };
 
   function hashHue(id) {
     var h = 0;
     for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     return h % 360;
+  }
+
+  // entity ids exceed 2^53: read them from the raw row text, not JSON.parse.
+  function idField(raw, name, fallback) {
+    if (typeof raw === "string") {
+      var m = new RegExp('"' + name + '"\\s*:\\s*"?(\\d+)').exec(raw);
+      if (m) return m[1];
+    }
+    return fallback == null ? "" : String(fallback);
+  }
+
+  function parseLiveRow(raw) {
+    var o = typeof raw === "string" ? JSON.parse(raw) : raw;
+    var loc = o.location || {};
+    return {
+      id: idField(raw, "entity_id", o.entity_id),
+      empire: idField(raw, "empire_entity_id", o.empire_entity_id),
+      x: loc.x, z: loc.z, dim: loc.dimension,
+      energy: o.energy, upkeep: o.upkeep, active: !!o.active
+    };
+  }
+
+  function ingestLive(tables) {
+    (tables || []).forEach(function (t) {
+      if (t.table_name && t.table_name !== "empire_node_state") return;
+      (t.updates || []).forEach(function (u) {
+        (u.deletes || []).forEach(function (r) { live.rows.delete(parseLiveRow(r).id); });
+        (u.inserts || []).forEach(function (r) { var o = parseLiveRow(r); live.rows.set(o.id, o); });
+      });
+    });
+  }
+
+  function liveRedraw() {
+    if (live.raf) return;
+    live.raf = requestAnimationFrame(function () {
+      live.raf = 0;
+      setWatchStatus();
+      if (!drag) drawWatch();
+    });
+  }
+
+  function startLive() {
+    if (live.ws || !wtOn) return;
+    clearTimeout(live.timer); live.timer = 0;
+    live.state = live.retry ? "reconnecting" : "connecting";
+    live.ready = false;
+    var url = "wss://" + LIVE_HOST + ":" + (3000 + parseInt(region, 10)) +
+              "/v1/database/idc-" + region + "/subscribe?compression=None";
+    var ws;
+    try { ws = new WebSocket(url, ["v1.json.spacetimedb"]); } catch (e) { scheduleLive(); return; }
+    live.ws = ws;
+    ws.onmessage = function (ev) {
+      if (typeof ev.data !== "string") return;
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.IdentityToken) {
+        ws.send(JSON.stringify({ Subscribe: { request_id: 1, query_strings: ["SELECT * FROM empire_node_state;"] } }));
+        return;
+      }
+      var tables = null;
+      if (msg.InitialSubscription) {
+        live.rows.clear();
+        tables = (msg.InitialSubscription.database_update || {}).tables;
+        live.ready = true; live.state = "live"; live.retry = 0;
+      } else if (msg.SubscribeApplied) {
+        live.rows.clear();
+        var sa = msg.SubscribeApplied;
+        tables = (sa.update || sa.database_update || {}).tables;
+        live.ready = true; live.state = "live"; live.retry = 0;
+      } else if (msg.TransactionUpdate) {
+        var c = (msg.TransactionUpdate.status || {}).Committed;
+        tables = c && c.tables;
+      } else if (msg.TransactionUpdateLight) {
+        tables = (msg.TransactionUpdateLight.update || {}).tables;
+      } else if (msg.SubscriptionError) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+        return;
+      }
+      if (tables) { ingestLive(tables); liveRedraw(); }
+    };
+    ws.onclose = function () {
+      if (live.ws !== ws) return;          // superseded / stopped on purpose
+      live.ws = null;
+      scheduleLive();
+    };
+    liveRedraw();
+  }
+
+  function scheduleLive() {
+    if (!wtOn) return;
+    live.state = "reconnecting";
+    live.retry++;
+    var delay = Math.min(60000, 2000 * Math.pow(2, live.retry - 1));
+    live.timer = setTimeout(startLive, delay);
+    liveRedraw();
+  }
+
+  function stopLive() {
+    clearTimeout(live.timer); live.timer = 0;
+    var ws = live.ws;
+    live.ws = null; live.state = "off"; live.ready = false; live.retry = 0;
+    live.rows.clear();
+    if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
+  }
+
+  // Live towers inside this region that the coverage JSON doesn't know yet.
+  function liveExtras() {
+    if (!live.ready || !wt) return [];
+    var o = regionOrigin(region), out = [];
+    live.rows.forEach(function (r) {
+      if (wt.byId.has(r.id) || r.dim !== 1) return;
+      var lx = r.x - o.x, lz = r.z - o.z;
+      if (lx < 0 || lz < 0 || lx >= REGION_SIDE || lz >= REGION_SIDE) return;
+      out.push({ live: r, x: lx, z: lz, n: Math.round(r.z / 3), e: Math.round(r.x / 3) });
+    });
+    return out;
+  }
+
+  function empireColor(empireId) {
+    if (wt.empireIdx.has(empireId)) return wt.colors[wt.empireIdx.get(empireId)];
+    return wt.fallback[hashHue(empireId) % wt.fallback.length];
+  }
+
+  function empireName(empireId) {
+    var i = wt.empireIdx.get(empireId);
+    var e = i == null ? null : wt.d.empires[i];
+    return (e && e.name) || ("Empire " + empireId);
   }
 
   function parseWatch(d) {
@@ -488,7 +628,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     var colors = d.empires.map(function (e) {
       return e.color || FALLBACK[hashHue(e.id) % FALLBACK.length];
     });
-    return { d: d, owner: owner, byTower: byTower, colors: colors };
+    var byId = new Map(), empireIdx = new Map();
+    d.towers.forEach(function (t, i) { byId.set(t.id, i); });
+    d.empires.forEach(function (e, i) { empireIdx.set(e.id, i); });
+    return { d: d, owner: owner, byTower: byTower, colors: colors, fallback: FALLBACK,
+             byId: byId, empireIdx: empireIdx };
   }
 
   function ownerAt(cx, cz) {
@@ -621,24 +765,49 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     strokeSides(thick, 2.5, 0.95);
     g.globalAlpha = 1;
 
-    // tower markers, constant screen size
+    // tower markers, constant screen size. Live state: filled = active,
+    // dark = inactive, hollow gray = gone from the live table, dashed white
+    // ring = built after the coverage JSON (no chunks yet).
     g.setTransform(1, 0, 0, 1, 0, 0);
     var rad = 5.5 * dpr;
-    towers.forEach(function (tw, idx) {
-      var c = tileCenter(tw.x, tw.z);
+    wtMarkers = [];
+    function marker(tx, tz, ref, fill, ring, dashed, hot) {
+      var c = tileCenter(tx, tz);
+      wtMarkers.push({ cx: c[0], cy: c[1], ref: ref });
       var sx = (L.ox + (c[0] - v.x) * L.s) * dpr, sy = (L.oy + (c[1] - v.y) * L.s) * dpr;
-      if (sx < -rad || sy < -rad || sx > cw + rad || sy > ch + rad) return;
+      if (sx < -rad * 2 || sy < -rad * 2 || sx > cw + rad * 2 || sy > ch + rad * 2) return;
+      g.setLineDash([]);
       g.beginPath();
       g.moveTo(sx, sy - rad * 1.25);
       g.lineTo(sx + rad, sy);
       g.lineTo(sx, sy + rad * 1.25);
       g.lineTo(sx - rad, sy);
       g.closePath();
-      g.fillStyle = tw.active ? wt.colors[tw.empire] : "#101418";
-      g.fill();
-      g.lineWidth = (idx === wtHover ? 2.5 : 1.5) * dpr;
-      g.strokeStyle = idx === wtHover ? "#ffffff" : "#101418";
+      if (fill) { g.fillStyle = fill; g.fill(); }
+      g.lineWidth = (hot ? 2.5 : 1.5) * dpr;
+      g.strokeStyle = hot ? "#ffffff" : ring;
       g.stroke();
+      if (dashed) {
+        g.beginPath();
+        g.arc(sx, sy, rad * 2, 0, Math.PI * 2);
+        g.setLineDash([3 * dpr, 3 * dpr]);
+        g.lineWidth = 1.5 * dpr;
+        g.strokeStyle = "#ffffff";
+        g.stroke();
+        g.setLineDash([]);
+      }
+    }
+    towers.forEach(function (tw, idx) {
+      var hot = wtHover === idx;
+      var lr = live.ready ? live.rows.get(tw.id) : null;
+      if (live.ready && !lr) { marker(tw.x, tw.z, idx, null, "#9aa4ad", false, hot); return; }
+      var active = lr ? lr.active : true;
+      marker(tw.x, tw.z, idx, active ? wt.colors[tw.empire] : "#101418", "#101418", false, hot);
+    });
+    liveExtras().forEach(function (x) {
+      var hot = wtHover === "new:" + x.live.id;
+      marker(x.x, x.z, "new:" + x.live.id, x.live.active ? empireColor(x.live.empire) : "#101418",
+             "#101418", true, hot);
     });
   }
 
@@ -655,10 +824,23 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     if (wtState === "loading") { wtStatus.textContent = "loading…"; return; }
     if (wtState === "missing") { wtStatus.textContent = "not available for this region"; return; }
     if (!wt) { wtStatus.textContent = ""; return; }
-    var inside = wt.d.towers.filter(function (t) { return t.inside; }).length;
     var names = wt.d.empires.map(function (e) { return e.name || ("Empire " + e.id); });
-    wtStatus.textContent = inside + " towers · " + names.join(", ") + " · " + fmtAgo(wt.d.fetchedAt);
-    wtStatus.title = "Watchtower data fetched " + new Date(wt.d.fetchedAt * 1000).toLocaleString();
+    var count, liveTxt;
+    if (live.ready) {
+      var o = regionOrigin(region);
+      count = 0;
+      live.rows.forEach(function (r) {
+        if (r.dim === 1 && r.x >= o.x && r.z >= o.z && r.x < o.x + REGION_SIDE && r.z < o.z + REGION_SIDE) count++;
+      });
+      liveTxt = live.state === "live" ? "● live" : "reconnecting…";
+    } else {
+      count = wt.d.towers.filter(function (t) { return t.inside; }).length;
+      liveTxt = live.state === "reconnecting" ? "offline, retrying…" : "connecting…";
+    }
+    wtStatus.textContent = count + " towers · " + names.join(", ") + " · " + liveTxt;
+    wtStatus.title = "Energy, upkeep and active state stream live from the region " + region +
+      " mirror.\nCoverage areas from " + new Date(wt.d.fetchedAt * 1000).toLocaleString() +
+      " (" + fmtAgo(wt.d.fetchedAt) + ").";
   }
 
   function loadWatch() {
@@ -667,7 +849,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     setWatchStatus();
     fetch("region-" + region + "-watchtowers.json", { cache: "no-cache" })
       .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
-      .then(function (d) { wt = parseWatch(d); wtState = "ready"; setWatchStatus(); drawWatch(); })
+      .then(function (d) {
+        wt = parseWatch(d); wtState = "ready";
+        if (wtOn) startLive();
+        setWatchStatus(); drawWatch();
+      })
       .catch(function () { wtState = "missing"; setWatchStatus(); });
   }
 
@@ -677,22 +863,42 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     var p = new URLSearchParams(location.search);
     if (on) p.set("watchtowers", "1"); else p.delete("watchtowers");
     history.replaceState(null, "", "?" + p.toString());
-    if (on) loadWatch();
+    if (on) { loadWatch(); if (wt) startLive(); } else stopLive();
     setWatchStatus();
     drawWatch();
   }
   wtBox.addEventListener("change", function () { setWatch(wtBox.checked); });
 
-  // Hover: which tower covers the super cell under the cursor.
-  function watchInfoAt(superCell) {
+  function liveLine(lr) {
+    if (!live.ready) return live.state === "reconnecting" ? "energy: live feed offline" : "energy: connecting…";
+    if (!lr) return "not in live data — destroyed since coverage refresh?";
+    return "energy " + lr.energy + " · upkeep " + lr.upkeep + (lr.active ? "" : " · inactive");
+  }
+
+  // Hover: a marker under the cursor wins, else the tower covering the
+  // super cell under it. `p` = canvas point with its px-per-canvas scale.
+  function watchInfoAt(superCell, p) {
     if (!wtOn || !wt) return null;
-    var ti = ownerAt(superCell.x >> 5, superCell.z >> 5);
-    if (ti !== wtHover) { wtHover = ti; if (!drag) drawWatch(); }
-    if (ti < 0) return null;
-    var tw = wt.d.towers[ti], em = wt.d.empires[tw.empire];
+    var hit = -1;
+    if (p) {
+      var best = MARKER_HOVER_PX / p.s;
+      wtMarkers.forEach(function (m) {
+        var d = Math.hypot(m.cx - p.x, m.cy - p.y);
+        if (d <= best) { best = d; hit = m.ref; }
+      });
+    }
+    if (hit === -1) hit = ownerAt(superCell.x >> 5, superCell.z >> 5);
+    if (hit !== wtHover) { wtHover = hit; if (!drag) drawWatch(); }
+    if (hit === -1) return null;
+    if (typeof hit === "string") {
+      var r = live.rows.get(hit.slice(4));
+      if (!r) return null;
+      return "Watchtower N " + Math.round(r.z / 3) + "  E " + Math.round(r.x / 3) + " · " + empireName(r.empire) +
+             "\n" + liveLine(r) + "\nnew — coverage appears after the next map refresh";
+    }
+    var tw = wt.d.towers[hit], em = wt.d.empires[tw.empire];
     return "Watchtower N " + tw.n + "  E " + tw.e + " · " + (em.name || "Empire " + em.id) +
-           "\nenergy " + tw.energy + " · upkeep " + tw.upkeep + " · " + tw.chunks + " chunks" +
-           (tw.active ? "" : " · inactive");
+           "\n" + liveLine(live.rows.get(tw.id)) + " · " + tw.chunks + " chunks";
   }
 
   // --- coordinate hover popover ---------------------------------------------
@@ -743,7 +949,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       return;
     }
     var wx = origin.x + t.x, wz = origin.z + t.z;
-    var info = watchInfoAt(c);
+    var info = watchInfoAt(c, p);
     tip.textContent = "N " + Math.round(wz / 3) + "  E " + Math.round(wx / 3) +
                       "   (x " + wx + ", z " + wz + ")" + (info ? "\n" + info : "");
     var tx = e.clientX + 14, ty = e.clientY + 18;
@@ -755,7 +961,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   });
   stage.addEventListener("pointerleave", function () {
     tip.style.display = "none";
-    if (wtHover >= 0) { wtHover = -1; drawWatch(); }
+    if (wtHover !== -1) { wtHover = -1; drawWatch(); }
   });
 
   // --- load -----------------------------------------------------------------
