@@ -30,6 +30,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 #watch { z-index: 3; }
 #grid { z-index: 4; }
 #labels { z-index: 5; }
+#mines { z-index: 6; }
 #raster img, #vector img, #preview { position: absolute; display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
 #raster img { image-rendering: auto; }
 #labels { width: 100%; height: 100%; overflow: visible; }
@@ -55,6 +56,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .hud label.disabled { color: var(--muted); cursor: not-allowed; }
 #wtstatus { color: var(--muted); font-size: 13px; }
 #wtstatus:empty { display: none; }
+#minesstatus { color: var(--muted); font-size: 13px; }
+#minesstatus:empty { display: none; }
 #zoomlabel { min-width: 52px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 #download[hidden] { display: none; }
 #coordtip {
@@ -80,6 +83,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     <canvas id="watch"></canvas>
     <canvas id="grid"></canvas>
     <svg id="labels" xmlns="http://www.w3.org/2000/svg"></svg>
+    <canvas id="mines"></canvas>
   </div>
 </div>
 
@@ -90,6 +94,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <a id="download" hidden download>SVG &darr;</a>
   <label id="wtlabel" title="Empire watchtowers and the chunks each one covers"><input type="checkbox" id="wt"> Watchtowers</label>
   <span id="wtstatus"></span>
+  <label id="mineslabel" title="Mining caves, marked by ore tier (T1 Ferralith … T10 Astralite)"><input type="checkbox" id="minesbox"> Mine tiers</label>
+  <span id="minesstatus"></span>
 </div>
 
 <div class="hud" id="zoombar">
@@ -144,6 +150,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 
   var params = new URLSearchParams(location.search);
   var wtOn = params.get("watchtowers") === "1";
+  var minesOn = params.get("mines") === "1";
   var region = REGIONS.indexOf(String(params.get("region") || "")) >= 0 ? params.get("region") : REGIONS[0];
 
   REGIONS.forEach(function (r) {
@@ -153,7 +160,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     select.appendChild(o);
   });
   select.addEventListener("change", function () {
-    location.search = "?region=" + select.value + (wtOn ? "&watchtowers=1" : "");
+    location.search = "?region=" + select.value + (wtOn ? "&watchtowers=1" : "") + (minesOn ? "&mines=1" : "");
   });
 
   function dir() { return "region-" + region + "/"; }
@@ -361,6 +368,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     layoutVector(L, visibleRect(L, 32));
     drawGrid(L, vis);
     drawWatch();
+    drawMines();
     labelsSvg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
     labelsSvg.style.width = L.sw + "px"; labelsSvg.style.height = L.sh + "px";
     if (preview) {
@@ -901,6 +909,166 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
            "\n" + liveLine(live.rows.get(tw.id)) + " · " + tw.chunks + " chunks";
   }
 
+  // --- mine tier layer ---------------------------------------------------------
+  // Mining caves are neutral claims named "<Large >{Ore} Cave"; the ore gives
+  // the tier. Markers come from the manifest's claim labels (no extra fetch)
+  // and draw at constant screen size above each label, so tiers stay readable
+  // long before the label text is. Fills are the T1–T10 paving palette shared
+  // with X-Ray / Bitme (game item ladder: gray … white).
+
+  var ORE_TIER = {
+    ferralith: 1, pyrelite: 2, emarium: 3, elenvar: 4, luminite: 5,
+    rathium: 6, aurumite: 7, celestium: 8, umbracite: 9, astralite: 10
+  };
+  var TIER_COLORS = [null,
+    "#89949a", "#a6816b", "#84937a", "#7a8aa6", "#8e6b81",
+    "#966963", "#b0a173", "#769e9e", "#545b62", "#c7dee9"];
+  var ROMAN = [null, "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+  var MINE_MIN_PX = 20, MINE_MAX_PX = 34;   // marker side, CSS px (grows with zoom)
+  var minesCanvas = document.getElementById("mines");
+  var minesBox = document.getElementById("minesbox");
+  var minesStatus = document.getElementById("minesstatus");
+  var mines = [];                // [{tier, name, x, y (canvas: label anchor), top (plate top)}], tier-ascending
+  var mineHits = [];             // last drawn screen boxes for hover, topmost last
+
+  function caveTier(name) {
+    var m = /^(?:Large\s+)?(\S+)\s+Cave$/i.exec(String(name || "").trim());
+    return m ? (ORE_TIER[m[1].toLowerCase()] || 0) : 0;
+  }
+
+  function buildMines() {
+    mines = [];
+    (man.labels || []).forEach(function (l) {
+      var tier = caveTier(l[7]);
+      if (tier) mines.push({ tier: tier, name: l[7], x: l[0], y: l[1], top: l[3] });
+    });
+    // Higher tiers draw last (on top) where markers overlap at low zoom.
+    mines.sort(function (a, b) { return a.tier - b.tier; });
+  }
+
+  function textColorFor(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    var lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+    return lum > 0.6 ? { fg: "#101418", halo: "rgba(255,255,255,0.35)" } : { fg: "#ffffff", halo: "rgba(16,20,24,0.55)" };
+  }
+
+  function roundRect(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  // Pickaxe in a unit box (0..1): diagonal handle (bottom-left → top-right)
+  // under a filled crescent head with pointed tips.
+  function pickaxe(g, x, y, s, color) {
+    g.save();
+    g.translate(x, y); g.scale(s, s);
+    g.lineCap = "round";
+    g.strokeStyle = color; g.fillStyle = color;
+    g.lineWidth = 0.15;
+    g.beginPath(); g.moveTo(0.1, 0.92); g.lineTo(0.66, 0.36); g.stroke();      // handle
+    g.beginPath();                                                             // head
+    g.moveTo(0.04, 0.3);
+    g.quadraticCurveTo(0.62, -0.04, 0.72, 0.98);
+    g.quadraticCurveTo(0.62, 0.26, 0.04, 0.3);
+    g.fill();
+    g.restore();
+  }
+
+  function drawMines() {
+    var L = committed ? layout(committed) : null;
+    var dpr = window.devicePixelRatio || 1;
+    var cw = L ? Math.round(L.sw * dpr) : 0, ch = L ? Math.round(L.sh * dpr) : 0;
+    if (minesCanvas.width !== cw || minesCanvas.height !== ch) {
+      minesCanvas.width = cw; minesCanvas.height = ch;
+      if (L) { minesCanvas.style.width = L.sw + "px"; minesCanvas.style.height = L.sh + "px"; }
+    }
+    var g = minesCanvas.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    mineHits = [];
+    if (!minesOn || !L || !mines.length) return;
+    var v = committed;
+    var depth = base.w / v.w;
+    var S = Math.round(Math.min(MINE_MAX_PX, Math.max(MINE_MIN_PX, MINE_MIN_PX + 4 * Math.log2(depth))));
+    var gap = 3;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mines.forEach(function (m) {
+      var cx = L.ox + (m.x - v.x) * L.s;
+      var plateTop = L.oy + (m.top - v.y) * L.s;
+      var anchorY = L.oy + (m.y - v.y) * L.s;
+      // Sit just above the label plate; when the label is sub-pixel this is
+      // the claim itself.
+      var bottom = Math.min(plateTop, anchorY) - gap;
+      var x = cx - S / 2, y = bottom - S;
+      if (x + S < 0 || y + S < 0 || x > L.sw || y > L.sh) return;
+      var fill = TIER_COLORS[m.tier], tc = textColorFor(fill);
+      g.shadowColor = "rgba(0,0,0,0.45)"; g.shadowBlur = 4; g.shadowOffsetY = 1;
+      roundRect(g, x, y, S, S, S * 0.22);
+      g.fillStyle = fill;
+      g.fill();
+      g.shadowColor = "transparent"; g.shadowBlur = 0; g.shadowOffsetY = 0;
+      g.lineWidth = 1.25;
+      g.strokeStyle = "#101418";
+      g.stroke();
+      // icon in the top-left third, numeral in the lower ~60% — no overlap
+      pickaxe(g, x + S * 0.08, y + S * 0.07, S * 0.34, tc.fg);
+      var label = ROMAN[m.tier];
+      var fs = S * 0.52;
+      g.font = "700 " + fs + "px DejaVu Sans, Verdana, sans-serif";
+      var maxW = S * 0.84, w = g.measureText(label).width;
+      if (w > maxW) { fs *= maxW / w; g.font = "700 " + fs + "px DejaVu Sans, Verdana, sans-serif"; }
+      g.textAlign = "center"; g.textBaseline = "middle";
+      var ty = y + S * 0.66;
+      g.lineJoin = "round";
+      g.lineWidth = Math.max(1.5, fs / 7);
+      g.strokeStyle = tc.halo;
+      g.strokeText(label, cx, ty);
+      g.fillStyle = tc.fg;
+      g.fillText(label, cx, ty);
+      mineHits.push({ x: x, y: y, s: S, m: m });
+    });
+  }
+
+  function setMinesStatus() {
+    if (!minesOn) { minesStatus.textContent = ""; return; }
+    if (!man) { minesStatus.textContent = ""; return; }
+    if (!mines.length) { minesStatus.textContent = "no caves in this region"; return; }
+    var counts = [];
+    mines.forEach(function (m) { counts[m.tier] = (counts[m.tier] || 0) + 1; });
+    var parts = [];
+    for (var t = 1; t <= 10; t++) if (counts[t]) parts.push("T" + t + " ×" + counts[t]);
+    minesStatus.textContent = mines.length + " caves";
+    minesStatus.title = parts.join("\n");
+  }
+
+  function setMines(on) {
+    minesOn = on;
+    minesBox.checked = on;
+    var p = new URLSearchParams(location.search);
+    if (on) p.set("mines", "1"); else p.delete("mines");
+    history.replaceState(null, "", "?" + p.toString());
+    setMinesStatus();
+    drawMines();
+  }
+  minesBox.addEventListener("change", function () { setMines(minesBox.checked); });
+
+  // screen point (stage px) → hovered cave, topmost first
+  function mineInfoAt(sx, sy) {
+    if (!minesOn) return null;
+    for (var i = mineHits.length - 1; i >= 0; i--) {
+      var h = mineHits[i];
+      if (sx >= h.x && sx <= h.x + h.s && sy >= h.y && sy <= h.y + h.s) {
+        return "T" + h.m.tier + " mine · " + h.m.name;
+      }
+    }
+    return null;
+  }
+
   // --- coordinate hover popover ---------------------------------------------
   // Inverts mapgen's Projection (pointy-top small hexes, +z north up) from
   // canvas px back to region tile coords, then to world-tile N/E HUD coords —
@@ -949,7 +1117,9 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       return;
     }
     var wx = origin.x + t.x, wz = origin.z + t.z;
-    var info = watchInfoAt(c, p);
+    var info = drag ? null : mineInfoAt(e.clientX - rect.left, e.clientY - rect.top);
+    var wInfo = watchInfoAt(c, p);
+    if (wInfo) info = info ? info + "\n" + wInfo : wInfo;
     tip.textContent = "N " + Math.round(wz / 3) + "  E " + Math.round(wx / 3) +
                       "   (x " + wx + ", z " + wz + ")" + (info ? "\n" + info : "");
     var tx = e.clientX + 14, ty = e.clientY + 18;
@@ -996,9 +1166,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         preview.src = "region-" + region + "-preview.png";
         rasterEl.parentNode.insertBefore(preview, rasterEl);
         buildLabels();
+        buildMines();
         fit();
         loading.hidden = true;
         if (wtOn) setWatch(true);
+        if (minesOn) setMines(true);
       })
       .catch(function (err) { fail("Could not load region " + region + " tiles — " + err.message); });
   }
