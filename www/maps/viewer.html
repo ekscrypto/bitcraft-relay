@@ -18,7 +18,11 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; }
 #stage { position: fixed; inset: 0; overflow: hidden; cursor: grab; background: #183e66; touch-action: none; }
 #stage.panning { cursor: grabbing; }
-#stage svg { display: block; width: 100%; height: 100%; }
+/* Pan/zoom gestures move the already-rasterized SVG with a GPU transform;
+   the real viewBox is only committed (one full vector redraw) once the
+   gesture pauses. will-change keeps Firefox from re-rasterizing per frame. */
+#stage svg { display: block; width: 100%; height: 100%; transform-origin: 0 0; will-change: transform; }
+#preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .hud {
   position: fixed; z-index: 10; display: flex; gap: 8px; align-items: center;
   background: color-mix(in srgb, var(--panel) 88%, transparent);
@@ -50,6 +54,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   background: color-mix(in srgb, var(--bg) 75%, transparent); color: var(--muted); font-size: 15px;
 }
 #loading[hidden] { display: none; }
+#loading.over-preview { background: transparent; pointer-events: none; }
+#loading.over-preview > span {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px;
+}
 #error { color: #f85149; }
 </style>
 </head>
@@ -103,20 +112,66 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     location.search = "?region=" + select.value;
   });
 
-  function apply() {
+  // --- rendering ------------------------------------------------------------
+  // Changing the viewBox forces a full redraw of the ~10 MB vector scene,
+  // which is very slow in some browsers (notably Firefox on Windows). While a
+  // gesture is in progress we only update a CSS transform that maps the last
+  // committed viewBox onto the current view (compositor-only, once per frame),
+  // and commit the real viewBox after COMMIT_DELAY ms of inactivity.
+  var COMMIT_DELAY = 160;
+  var GRID_MIN_PX = 3;           // hide hex-grid pattern while hexes are narrower than this on screen
+  var committed = null;          // viewBox currently rasterized
+  var grid = null;               // full-canvas hex-grid pattern rect (most expensive layer)
+  var rafId = 0, commitTimer = 0;
+
+  // meet-fit scale + letterbox offsets for a viewBox in the current stage
+  function layout(v) {
+    var rect = stage.getBoundingClientRect();
+    var s = Math.min(rect.width / v.w, rect.height / v.h);
+    return { s: s, ox: (rect.width - v.w * s) / 2, oy: (rect.height - v.h * s) / 2 };
+  }
+
+  function render() {
+    rafId = 0;
+    if (!svg || !view || !committed) return;
+    var c = layout(committed), v = layout(view), k = v.s / c.s;
+    var tx = v.ox + (committed.x - view.x) * v.s - c.ox * k;
+    var ty = v.oy + (committed.y - view.y) * v.s - c.oy * k;
+    svg.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + k + ")";
+  }
+
+  function commit() {
+    clearTimeout(commitTimer); commitTimer = 0;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (!svg || !view) return;
+    committed = { x: view.x, y: view.y, w: view.w, h: view.h };
+    if (grid) {
+      var hexPx = SQRT3 * proj.size * layout(view).s;
+      grid.style.display = hexPx >= GRID_MIN_PX ? "" : "none";
+    }
     svg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
+    svg.style.transform = "";
+  }
+
+  function apply(immediate) {
+    if (!svg || !view) return;
     var depth = base.w / view.w;   // 1 = fit, MAX_DEPTH = deepest
     zoomLabel.textContent = Math.round(depth * 100) + "%";
     document.getElementById("zoom-in").disabled = depth >= MAX_DEPTH - 0.01;
     document.getElementById("zoom-out").disabled = depth <= 1.0001;
+    if (immediate || !committed) { commit(); return; }
+    if (!rafId) rafId = requestAnimationFrame(render);
+    clearTimeout(commitTimer);
+    commitTimer = setTimeout(commit, COMMIT_DELAY);
   }
 
   function fit() {
     if (!base) return;
     view = { x: base.x, y: base.y, w: base.w, h: base.h };
-    apply();
+    apply(true);
   }
+
+  window.addEventListener("resize", function () { if (svg && view) commit(); });
 
   function fitSize() {           // visible viewBox size when fully zoomed out
     return { w: base.w, h: base.h };  // NOT svg.viewBox — apply() mutates it on every zoom
@@ -175,7 +230,10 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     drag = { x: e.clientX, y: e.clientY };
     apply();
   });
-  stage.addEventListener("pointerup", function () { drag = null; stage.classList.remove("panning"); });
+  stage.addEventListener("pointerup", function () {
+    if (drag && svg) commit();
+    drag = null; stage.classList.remove("panning");
+  });
   stage.addEventListener("pointercancel", function () { drag = null; stage.classList.remove("panning"); });
   stage.addEventListener("dblclick", function (e) {
     var rect = stage.getBoundingClientRect();
@@ -263,7 +321,15 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     loadingText.hidden = false;
     errorEl.hidden = true;
     loadingText.textContent = "Loading region " + r + " (~8\u201313 MB, may take a few seconds)\u2026";
-    svg = null; base = null; view = null; proj = null;
+    svg = null; base = null; view = null; proj = null; committed = null; grid = null;
+    // Low-res preview (same canvas extent/aspect as the SVG) while the SVG loads.
+    stage.innerHTML = "";
+    var preview = new Image();
+    preview.id = "preview";
+    preview.alt = "";
+    preview.onload = function () { if (!svg) loading.classList.add("over-preview"); };
+    preview.src = "region-" + r + "-preview.png";
+    stage.appendChild(preview);
     fetch("region-" + r + ".svg", { cache: "no-cache" })
       .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
       .then(function (text) {
@@ -282,10 +348,12 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         };
         if (!isFinite(proj.size) || proj.size <= 0 ||
             !isFinite(proj.xOff) || !isFinite(proj.yOff)) proj = defaultProj();
+        grid = svg.querySelector('rect[fill="url(#hexgrid)"]');
         var vb = svg.viewBox.baseVal;
         base = { x: vb.x, y: vb.y, w: vb.width, h: vb.height };
         fit();
         loading.hidden = true;
+        loading.classList.remove("over-preview");
       })
       .catch(function (err) { fail("Could not load region-" + r + ".svg \u2014 " + err.message); });
   }
