@@ -1,0 +1,11 @@
+# Refresh the map viewer's road layer every 10 minutes.
+[Unit]
+Description=Refresh map viewer road layer
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

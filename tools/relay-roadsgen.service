@@ -1,0 +1,27 @@
+# Road layer for the map viewer (www/maps/viewer.html "Roads" toggle).
+#
+# roadsgen (bitcraft-calculator-httpd repo, Sources/bitcraft-roadd) reads each
+# region's paving grid from the embedded roads cache on loopback and writes
+# the compact region-N-roads/ file sets the viewer draws. Regions whose
+# snapshot is unchanged are skipped (ETag / 304). Triggered by
+# relay-roadsgen.timer; a oneshot unit never overlaps itself.
+#
+# Peak memory is about one region snapshot (~370 MB measured); the caps keep a
+# runaway from ever competing with bitcraft-mirror for RAM.
+[Unit]
+Description=Map viewer road layer generator
+After=bitcraft-mirror.service
+
+[Service]
+Type=oneshot
+User=relay
+Group=relay
+ExecStart=/srv/relay/bin/roadsgen \
+    --relay http://127.0.0.1:8090 \
+    --regions 7,8,9,12,13,14,17,18,19 \
+    --out /srv/relay/bitcraft-relay/www/maps
+Nice=10
+IOSchedulingClass=idle
+MemoryHigh=768M
+MemoryMax=1G
+TimeoutStartSec=15min

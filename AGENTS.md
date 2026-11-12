@@ -31,6 +31,7 @@ Rust lives in sibling **`../spacetimedb-bitcraft-mirror/`**, branch
 | `check-integrity.sh` | Post-deploy WS/schema gate |
 | `wait-mirrors-live.sh`, `wait-cache-ready.sh` | Readiness polling |
 | `mirror-health.service` | Fleet `/health` sidecar (polls status `:3130`) |
+| `relay-roadsgen.service`, `relay-roadsgen.timer` | Every 10 min: `roadsgen` (calculator repo binary at `/srv/relay/bin/roadsgen`) condenses the roads cache into `www/maps/region-N-roads/` for the map viewer's Roads layer |
 
 nginx site configs for the production host are kept privately, not in
 this repo.

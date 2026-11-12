@@ -27,10 +27,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 #preview { z-index: 0; }
 #raster { z-index: 1; }
 #vector { z-index: 2; }
-#watch { z-index: 3; }
-#grid { z-index: 4; }
-#labels { z-index: 5; }
-#mines { z-index: 6; }
+#roads { z-index: 3; }
+#watch { z-index: 4; }
+#grid { z-index: 5; }
+#labels { z-index: 6; }
+#mines { z-index: 7; }
 #raster img, #vector img, #preview { position: absolute; display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
 #raster img { image-rendering: auto; }
 #labels { width: 100%; height: 100%; overflow: visible; }
@@ -58,6 +59,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 #wtstatus:empty { display: none; }
 #minesstatus { color: var(--muted); font-size: 13px; }
 #minesstatus:empty { display: none; }
+#roadsstatus { color: var(--muted); font-size: 13px; }
+#roadsstatus:empty { display: none; }
 #zoomlabel { min-width: 52px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 #download[hidden] { display: none; }
 #coordtip {
@@ -80,6 +83,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <div id="layer">
     <div id="raster"></div>
     <div id="vector"></div>
+    <canvas id="roads"></canvas>
     <canvas id="watch"></canvas>
     <canvas id="grid"></canvas>
     <svg id="labels" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -96,6 +100,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   <span id="wtstatus"></span>
   <label id="mineslabel" title="Mining caves, marked by ore tier (T1 Ferralith … T10 Astralite)"><input type="checkbox" id="minesbox"> Mine tiers</label>
   <span id="minesstatus"></span>
+  <label id="roadslabel" title="Player-built roads (paving outside settlements); zoom in to also see paving inside claims"><input type="checkbox" id="roadsbox"> Roads</label>
+  <span id="roadsstatus"></span>
 </div>
 
 <div class="hud" id="zoombar">
@@ -151,6 +157,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var params = new URLSearchParams(location.search);
   var wtOn = params.get("watchtowers") === "1";
   var minesOn = params.get("mines") === "1";
+  var roadsOn = params.get("roads") === "1";
   var region = REGIONS.indexOf(String(params.get("region") || "")) >= 0 ? params.get("region") : REGIONS[0];
 
   REGIONS.forEach(function (r) {
@@ -160,7 +167,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     select.appendChild(o);
   });
   select.addEventListener("change", function () {
-    location.search = "?region=" + select.value + (wtOn ? "&watchtowers=1" : "") + (minesOn ? "&mines=1" : "");
+    location.search = "?region=" + select.value + (wtOn ? "&watchtowers=1" : "") + (minesOn ? "&mines=1" : "") + (roadsOn ? "&roads=1" : "");
   });
 
   function dir() { return "region-" + region + "/"; }
@@ -367,6 +374,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     layoutRaster(L, visibleRect(L, 64));
     layoutVector(L, visibleRect(L, 32));
     drawGrid(L, vis);
+    drawRoads();
     drawWatch();
     drawMines();
     labelsSvg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
@@ -1069,6 +1077,337 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     return null;
   }
 
+  // --- roads layer -------------------------------------------------------------
+  // Data: region-N-roads/ from roadsgen (relay roads cache, refreshed on a
+  // timer). Paving is player-placed tile by tile; a "road" is a connected run
+  // of paving outside any claim. Two levels of detail:
+  //   overview.bin.gz   SUPER_SIDE² u8, one cell per super hex = paving type
+  //                     code of the road through it (0 = none). Drawn while
+  //                     small hexes are too small to see, at a minimum size
+  //                     so thin roads stay visible when zoomed out.
+  //   b_{bx}_{bz}.bin.gz  768×768 u8 per small hex: bits 0-6 type code,
+  //                     bit 7 = inside a claim. Fetched for the visible area
+  //                     once zoomed in; this is where paving inside
+  //                     settlements appears.
+
+  var ROAD_BLOCK = 768;          // small hexes per detail block side
+  var ROAD_DETAIL_PX = 2.5;      // small-hex width (device px) above which detail blocks draw
+  var ROAD_HEX_PX = 5;           // …and above which tiles draw as hexagons, not bricks
+  var ROAD_MIN_PX = 2.2;         // overview cells never draw smaller than this (device px)
+  var ROAD_CACHE = 24;           // decoded detail blocks kept in memory
+  var ROAD_REFRESH_MS = 5 * 60 * 1000;
+  var ROAD_FALLBACK = "#3d526b"; // untiered / unknown paving (X-Ray convention)
+  var ROAD_HALO = "rgba(16,20,24,0.8)";
+  var roadsCanvas = document.getElementById("roads");
+  var roadsBox = document.getElementById("roadsbox");
+  var roadsStatus = document.getElementById("roadsstatus");
+  var roads = null;              // {man, ov, ovIdx, color[], label[], has:Set, blocks:Map}
+  var roadsState = "idle";       // idle | loading | ready | missing
+  var roadsTimer = 0;
+
+  // Fetch a .gz file as bytes. Works whether the server sends it raw (we
+  // gunzip) or with Content-Encoding: gzip (the browser already did).
+  function fetchGz(url) {
+    return fetch(url)
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.arrayBuffer(); })
+      .then(function (buf) {
+        var u8 = new Uint8Array(buf);
+        if (u8.length < 2 || u8[0] !== 0x1f || u8[1] !== 0x8b) return u8;
+        if (typeof DecompressionStream === "undefined") throw new Error("browser cannot gunzip");
+        var stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+        return new Response(stream).arrayBuffer().then(function (b) { return new Uint8Array(b); });
+      });
+  }
+
+  function roadsDir() { return "region-" + region + "-roads/"; }
+
+  function buildRoads(m, ov) {
+    var color = [], label = [], tier = new Int8Array(128);
+    (m.types || []).forEach(function (t) {
+      tier[t.code] = t.tier;
+      color[t.code] = TIER_COLORS[t.tier] || ROAD_FALLBACK;
+      label[t.code] = (t.tier > 0 ? "T" + t.tier + " " : "") + t.name;
+    });
+    color[m.unknownCode] = ROAD_FALLBACK; label[m.unknownCode] = "Paving";
+    var n = 0, i;
+    for (i = 0; i < ov.length; i++) if (ov[i]) n++;
+    var idx = new Uint32Array(n);
+    for (i = 0, n = 0; i < ov.length; i++) if (ov[i]) idx[n++] = i;
+    var has = new Set();
+    (m.blocks || []).forEach(function (b) { has.add(b[0] + "_" + b[1]); });
+    return { man: m, ov: ov, ovIdx: idx, color: color, label: label, tier: tier, has: has, blocks: new Map(), lv: [] };
+  }
+
+  function loadRoads() {
+    if (roadsState === "loading") return;
+    var first = !roads;
+    if (first) { roadsState = "loading"; setRoadsStatus(); }
+    fetch(roadsDir() + "manifest.json", { cache: "no-cache" })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+      .then(function (m) {
+        if (roads && roads.man.version === m.version) { roads.man = m; setRoadsStatus(); return null; }
+        return fetchGz(roadsDir() + "overview.bin.gz?v=" + encodeURIComponent(m.version)).then(function (ov) {
+          if (ov.length !== SUPER_SIDE * SUPER_SIDE) throw new Error("bad overview size");
+          roads = buildRoads(m, ov); roadsState = "ready";
+          setRoadsStatus();
+          if (!drag) drawRoads();
+        });
+      })
+      .catch(function () {
+        // A failed refresh keeps the layer already on screen.
+        if (!roads) { roadsState = "missing"; setRoadsStatus(); }
+      });
+  }
+
+  // Decoded detail block, or null while it loads / when it failed.
+  function roadBlock(key) {
+    var r = roads, hit = r.blocks.get(key);
+    if (hit instanceof Uint8Array) { r.blocks.delete(key); r.blocks.set(key, hit); return hit; }
+    if (hit) return null;        // "loading" | "missing"
+    r.blocks.set(key, "loading");
+    fetchGz(roadsDir() + "b_" + key + ".bin.gz?v=" + encodeURIComponent(r.man.version))
+      .then(function (u8) {
+        if (u8.length !== ROAD_BLOCK * ROAD_BLOCK) throw new Error("bad block size");
+        r.blocks.set(key, u8);
+        var loaded = [];
+        r.blocks.forEach(function (v, k2) { if (v instanceof Uint8Array) loaded.push(k2); });
+        for (var i = 0; i < loaded.length - ROAD_CACHE; i++) r.blocks.delete(loaded[i]);
+        if (r === roads && !drag) drawRoads();
+      })
+      .catch(function () { r.blocks.set(key, "missing"); });
+    return null;
+  }
+
+  // Coarser overview level L: each cell pools 2^L × 2^L super hexes, keeping
+  // the highest-tier road in it (max-pool, so a one-cell-wide road never
+  // fades out). Rendered once into a bitmap, one pixel per cell, north up.
+  function roadLevel(L) {
+    if (roads.lv[L]) return roads.lv[L];
+    var prev = L === 1 ? { g: roads.ov, n: SUPER_SIDE } : roadLevel(L - 1);
+    var n = prev.n >> 1, src = prev.g, pn = prev.n, grid = new Uint8Array(n * n), tier = roads.tier;
+    var img = document.createElement("canvas"), halo = document.createElement("canvas");
+    img.width = img.height = halo.width = halo.height = n;
+    var ci = img.getContext("2d"), ch = halo.getContext("2d");
+    var di = ci.createImageData(n, n), dh = ch.createImageData(n, n);
+    var rgb = [];
+    for (var z = 0; z < n; z++) {
+      for (var x = 0; x < n; x++) {
+        var i0 = 2 * z * pn + 2 * x, best = 0;
+        var kids = [src[i0], src[i0 + 1], src[i0 + pn], src[i0 + pn + 1]];
+        for (var j = 0; j < 4; j++) if (kids[j] && (!best || tier[kids[j]] > tier[best])) best = kids[j];
+        if (!best) continue;
+        grid[z * n + x] = best;
+        var c = rgb[best];
+        if (!c) { var v = parseInt((roads.color[best] || ROAD_FALLBACK).slice(1), 16); c = rgb[best] = [v >> 16, (v >> 8) & 255, v & 255]; }
+        var o = ((n - 1 - z) * n + x) * 4;
+        di.data[o] = c[0]; di.data[o + 1] = c[1]; di.data[o + 2] = c[2]; di.data[o + 3] = 255;
+        dh.data[o] = 16; dh.data[o + 1] = 20; dh.data[o + 2] = 24; dh.data[o + 3] = 204;
+      }
+    }
+    ci.putImageData(di, 0, 0); ch.putImageData(dh, 0, 0);
+    return (roads.lv[L] = { g: grid, n: n, img: img, halo: halo });
+  }
+
+  function fillCells(g, pts, w, h, pad) {
+    for (var i = 0; i < pts.length; i += 2) g.fillRect(pts[i] - w / 2 - pad, pts[i + 1] - h / 2 - pad, w + 2 * pad, h + 2 * pad);
+  }
+
+  // Roads at overview zoom: one brick per super hex, never thinner than
+  // ROAD_MIN_PX, dark halo underneath for contrast on any biome.
+  function drawRoadOverview(g, vis, k) {
+    var R = proj.size * 3, W = SQRT3 * R, H = 1.5 * R;
+    var L = 0;
+    while (W * k * (1 << L) < ROAD_MIN_PX && L < 4) L++;
+    if (L) {
+      // Far out: one bitmap blit per pass instead of a rect per cell. Rows
+      // are pooled in pairs, so the odd-row half-cell shift averages to W/4.
+      var lv = roadLevel(L), pad = 1.2 / k;
+      var X = proj.xOff - W / 4, Y = proj.yOff - H * (SUPER_SIDE - 1) - H / 2;
+      var w0 = W * SUPER_SIDE, h0 = H * SUPER_SIDE;
+      g.imageSmoothingEnabled = false;
+      [[-pad, 0], [pad, 0], [0, -pad], [0, pad]].forEach(function (o) { g.drawImage(lv.halo, X + o[0], Y + o[1], w0, h0); });
+      g.drawImage(lv.img, X, Y, w0, h0);
+      return;
+    }
+    var a = pixelToTile(vis.x0, vis.y1, 3), b = pixelToTile(vis.x1, vis.y0, 3);
+    var sz0 = Math.max(0, Math.min(a.z, b.z) - 1), sz1 = Math.min(SUPER_SIDE - 1, Math.max(a.z, b.z) + 1);
+    var sx0 = Math.max(0, Math.min(a.x, b.x) - 1), sx1 = Math.min(SUPER_SIDE - 1, Math.max(a.x, b.x) + 1);
+    if (sz1 < sz0 || sx1 < sx0) return;
+    var idx = roads.ovIdx, ov = roads.ov;
+    var lo = 0, hi = idx.length, from = sz0 * SUPER_SIDE, end = (sz1 + 1) * SUPER_SIDE;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (idx[mid] < from) lo = mid + 1; else hi = mid; }
+    var by = {}, all = [];
+    for (var i = lo; i < idx.length && idx[i] < end; i++) {
+      var n = idx[i], sx = n % SUPER_SIDE;
+      if (sx < sx0 || sx > sx1) continue;
+      var sz = (n / SUPER_SIDE) | 0;
+      var cx = proj.xOff + W * (sx + ((sz & 1) ? 0.5 : 0)), cy = proj.yOff - H * sz;
+      var c = ov[n];
+      (by[c] || (by[c] = [])).push(cx, cy);
+      all.push(cx, cy);
+    }
+    var min = ROAD_MIN_PX / k, w = Math.max(W, min), h = Math.max(H, min);
+    g.fillStyle = ROAD_HALO;
+    fillCells(g, all, w, h, 1.2 / k);
+    Object.keys(by).forEach(function (c) {
+      g.fillStyle = roads.color[c] || ROAD_FALLBACK;
+      fillCells(g, by[c], w, h, 0);
+    });
+  }
+
+  // Tile-exact paving for the visible blocks. Returns false if a visible
+  // block is still loading (the caller then keeps the overview underneath).
+  function drawRoadDetail(g, vis, k) {
+    var s = proj.size, W = SQRT3 * s, H = 1.5 * s;
+    var a = pixelToTile(vis.x0, vis.y1), b = pixelToTile(vis.x1, vis.y0);
+    var z0 = Math.max(0, Math.min(a.z, b.z) - 1), z1 = Math.min(REGION_SIDE - 1, Math.max(a.z, b.z) + 1);
+    var x0 = Math.max(0, Math.min(a.x, b.x) - 1), x1 = Math.min(REGION_SIDE - 1, Math.max(a.x, b.x) + 1);
+    if (z1 < z0 || x1 < x0) return true;
+    var road = {}, claim = {}, complete = true;
+    for (var bz = (z0 / ROAD_BLOCK) | 0; bz <= ((z1 / ROAD_BLOCK) | 0); bz++) {
+      for (var bx = (x0 / ROAD_BLOCK) | 0; bx <= ((x1 / ROAD_BLOCK) | 0); bx++) {
+        var key = bx + "_" + bz;
+        if (!roads.has.has(key)) continue;
+        var data = roadBlock(key);
+        if (!data) { if (roads.blocks.get(key) === "loading") complete = false; continue; }
+        var ox = bx * ROAD_BLOCK, oz = bz * ROAD_BLOCK;
+        var xa = Math.max(x0, ox), xb = Math.min(x1, ox + ROAD_BLOCK - 1);
+        var za = Math.max(z0, oz), zb = Math.min(z1, oz + ROAD_BLOCK - 1);
+        for (var z = za; z <= zb; z++) {
+          var row = (z - oz) * ROAD_BLOCK - ox;
+          var cy = proj.yOff - H * z, shift = proj.xOff + ((z & 1) ? W / 2 : 0);
+          // Same-type runs along the row collapse to one entry [cx, cy, len].
+          for (var x = xa; x <= xb; x++) {
+            var v = data[row + x];
+            if (!v) continue;
+            var x2 = x;
+            while (x2 < xb && data[row + x2 + 1] === v) x2++;
+            var set = (v & 128) ? claim : road, c = v & 127;
+            (set[c] || (set[c] = [])).push(shift + W * x, cy, x2 - x + 1);
+            x = x2;
+          }
+        }
+      }
+    }
+    if (!complete) drawRoadOverview(g, vis, k);
+    if (W * k < ROAD_HEX_PX) {
+      // Bricks (W × 1.5·size tiles the lattice exactly): cheap at mid zoom.
+      var runs = function (pts, pad) {
+        for (var n = 0; n < pts.length; n += 3) g.fillRect(pts[n] - W / 2 - pad, pts[n + 1] - H / 2 - pad, W * pts[n + 2] + 2 * pad, H + 2 * pad);
+      };
+      g.fillStyle = ROAD_HALO;
+      Object.keys(road).forEach(function (c) { runs(road[c], 1.5 / k); });
+      [claim, road].forEach(function (set) {
+        g.globalAlpha = set === claim ? 0.8 : 1;
+        Object.keys(set).forEach(function (c) {
+          g.fillStyle = roads.color[c] || ROAD_FALLBACK;
+          runs(set[c], 0);
+        });
+      });
+      g.globalAlpha = 1;
+      return complete;
+    }
+    var dx = [], dy = [];
+    for (var i = 0; i < 6; i++) {
+      var t = (-30 + 60 * i) * Math.PI / 180;
+      dx.push(s * Math.cos(t)); dy.push(s * Math.sin(t));
+    }
+    g.lineJoin = "round";
+    g.lineWidth = Math.max(1 / k, s * 0.09);
+    [claim, road].forEach(function (set) {
+      g.globalAlpha = set === claim ? 0.8 : 1;
+      g.strokeStyle = set === claim ? "rgba(16,20,24,0.45)" : ROAD_HALO;
+      Object.keys(set).forEach(function (c) {
+        var pts = set[c];
+        g.beginPath();
+        for (var n = 0; n < pts.length; n += 3) {
+          for (var m = 0; m < pts[n + 2]; m++) {
+            var hx = pts[n] + W * m, hy = pts[n + 1];
+            g.moveTo(hx + dx[0], hy + dy[0]);
+            for (var j = 1; j < 6; j++) g.lineTo(hx + dx[j], hy + dy[j]);
+            // Not closePath(): in Chromium it costs O(path size), so a batch
+            // of N hexagons goes O(N²). fill() closes subpaths implicitly.
+            g.lineTo(hx + dx[0], hy + dy[0]);
+          }
+        }
+        g.fillStyle = roads.color[c] || ROAD_FALLBACK;
+        g.fill();
+        g.stroke();
+      });
+    });
+    g.globalAlpha = 1;
+    return complete;
+  }
+
+  function drawRoads() {
+    var L = committed ? layout(committed) : null;
+    var dpr = window.devicePixelRatio || 1;
+    var cw = L ? Math.round(L.sw * dpr) : 0, ch = L ? Math.round(L.sh * dpr) : 0;
+    if (roadsCanvas.width !== cw || roadsCanvas.height !== ch) {
+      roadsCanvas.width = cw; roadsCanvas.height = ch;
+      if (L) { roadsCanvas.style.width = L.sw + "px"; roadsCanvas.style.height = L.sh + "px"; }
+    }
+    var g = roadsCanvas.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    if (!roadsOn || !roads || !L) return;
+    var v = committed, k = L.s * dpr;
+    var vis = {
+      x0: v.x - L.ox / L.s, y0: v.y - L.oy / L.s,
+      x1: v.x + (L.sw - L.ox) / L.s, y1: v.y + (L.sh - L.oy) / L.s
+    };
+    g.setTransform(k, 0, 0, k, (L.ox - v.x * L.s) * dpr, (L.oy - v.y * L.s) * dpr);
+    if (SQRT3 * proj.size * k >= ROAD_DETAIL_PX) drawRoadDetail(g, vis, k);
+    else drawRoadOverview(g, vis, k);
+  }
+
+  function setRoadsStatus() {
+    roadsStatus.title = "";
+    if (!roadsOn) { roadsStatus.textContent = ""; return; }
+    if (roadsState === "loading") { roadsStatus.textContent = "loading…"; return; }
+    if (roadsState === "missing" || !roads) { roadsStatus.textContent = "not available"; return; }
+    var c = roads.man.counts || {};
+    var total = (c.road || 0) + (c.claim || 0) + (c.stray || 0);
+    roadsStatus.textContent = total ? (c.road || 0).toLocaleString() + " road tiles" : "no paving yet";
+    roadsStatus.title = (c.road || 0).toLocaleString() + " road tiles outside claims\n" +
+      (c.claim || 0).toLocaleString() + " paved tiles inside claims (zoom in)\n" +
+      (c.stray || 0).toLocaleString() + " in small isolated patches (zoom in)\n" +
+      "Updated " + new Date(roads.man.generatedAt).toLocaleString() +
+      " (" + fmtAgo(roads.man.generatedAt / 1000) + ").";
+  }
+
+  function setRoads(on) {
+    roadsOn = on;
+    roadsBox.checked = on;
+    var p = new URLSearchParams(location.search);
+    if (on) p.set("roads", "1"); else p.delete("roads");
+    history.replaceState(null, "", "?" + p.toString());
+    clearInterval(roadsTimer); roadsTimer = 0;
+    if (on) {
+      loadRoads();
+      roadsTimer = setInterval(function () { if (!document.hidden) loadRoads(); }, ROAD_REFRESH_MS);
+    }
+    setRoadsStatus();
+    drawRoads();
+  }
+  roadsBox.addEventListener("change", function () { setRoads(roadsBox.checked); });
+
+  // Hover: exact paving under the cursor when its detail block is loaded,
+  // else the road through the super cell.
+  function roadInfoAt(t, c) {
+    if (!roadsOn || !roads) return null;
+    if (t.x >= 0 && t.z >= 0 && t.x < REGION_SIDE && t.z < REGION_SIDE) {
+      var bx = (t.x / ROAD_BLOCK) | 0, bz = (t.z / ROAD_BLOCK) | 0;
+      var data = roads.blocks.get(bx + "_" + bz);
+      if (data instanceof Uint8Array) {
+        var v = data[(t.z - bz * ROAD_BLOCK) * ROAD_BLOCK + (t.x - bx * ROAD_BLOCK)];
+        return v ? (roads.label[v & 127] || "Paving") + ((v & 128) ? " · inside a claim" : "") : null;
+      }
+    }
+    var o = roads.ov[c.z * SUPER_SIDE + c.x];
+    return o ? "Road · " + (roads.label[o] || "Paving") : null;
+  }
+
   // --- coordinate hover popover ---------------------------------------------
   // Inverts mapgen's Projection (pointy-top small hexes, +z north up) from
   // canvas px back to region tile coords, then to world-tile N/E HUD coords —
@@ -1118,6 +1457,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     }
     var wx = origin.x + t.x, wz = origin.z + t.z;
     var info = drag ? null : mineInfoAt(e.clientX - rect.left, e.clientY - rect.top);
+    var rInfo = roadInfoAt(t, c);
+    if (rInfo) info = info ? info + "\n" + rInfo : rInfo;
     var wInfo = watchInfoAt(c, p);
     if (wInfo) info = info ? info + "\n" + wInfo : wInfo;
     tip.textContent = "N " + Math.round(wz / 3) + "  E " + Math.round(wx / 3) +
@@ -1171,6 +1512,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         loading.hidden = true;
         if (wtOn) setWatch(true);
         if (minesOn) setMines(true);
+        if (roadsOn) setRoads(true);
       })
       .catch(function (err) { fail("Could not load region " + region + " tiles — " + err.message); });
   }
