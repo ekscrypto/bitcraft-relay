@@ -79,6 +79,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var MAX_DEPTH = 60;            // deepest zoom: fit-width / MAX_DEPTH
   var MIN_FACTOR = 1.4, MAX_FACTOR = 1.6; // button zoom factor per click (eased)
   var REGION_SIDE = 7680;        // small-hex tiles per region side (odd-r lattice)
+  var SUPER_SIDE = 2560;         // super-hex (terrain cell) grid per region side
   var SQRT3 = Math.sqrt(3);
   var stage = document.getElementById("stage");
   var loading = document.getElementById("loading");
@@ -207,10 +208,12 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     return { size: size, xOff: size + 8, yOff: size + 8 + 1.5 * size * (REGION_SIDE - 1) };
   }
 
-  // canvas px → nearest odd-r tile (port of mapgen Projection::pixel_to_hex)
-  function pixelToTile(px, py) {
-    var wx = (px - proj.xOff) / proj.size;
-    var wy = (py - proj.yOff) / proj.size;
+  // canvas px → nearest odd-r tile (port of mapgen Projection::pixel_to_hex).
+  // `scale` 3 inverts onto the super-hex (terrain-cell) lattice instead.
+  function pixelToTile(px, py, scale) {
+    var sz = proj.size * (scale || 1);
+    var wx = (px - proj.xOff) / sz;
+    var wy = (py - proj.yOff) / sz;
     var r = -wy / 1.5;
     var q = (wx - SQRT3 / 2 * r) / SQRT3;
     var s = -q - r;
@@ -227,8 +230,13 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     if (!svg || !view || !proj || e.pointerType === "touch") return;
     var rect = stage.getBoundingClientRect();
     var p = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    // Gate on the DRAWN super-hex (terrain cell), not the small tile: edge
+    // super-hexes overhang the region by a small hex on the south/west (those
+    // tiles are real world tiles of the neighbor region), and the last small
+    // row/column on the north/east belongs to an undrawn super cell.
+    var c = pixelToTile(p.x, p.y, 3);
     var t = pixelToTile(p.x, p.y);
-    if (t.x < 0 || t.x >= REGION_SIDE || t.z < 0 || t.z >= REGION_SIDE) {
+    if (c.x < 0 || c.x >= SUPER_SIDE || c.z < 0 || c.z >= SUPER_SIDE) {
       tip.style.display = "none";
       return;
     }
