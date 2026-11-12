@@ -18,11 +18,20 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; }
 #stage { position: fixed; inset: 0; overflow: hidden; cursor: grab; background: #183e66; touch-action: none; }
 #stage.panning { cursor: grabbing; }
-/* Pan/zoom gestures move the already-rasterized SVG with a GPU transform;
-   the real viewBox is only committed (one full vector redraw) once the
-   gesture pauses. will-change keeps Firefox from re-rasterizing per frame. */
-#stage svg { display: block; width: 100%; height: 100%; transform-origin: 0 0; will-change: transform; }
-#preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+/* Everything visible lives in #layer, laid out in screen px for the last
+   committed view. Gestures only move #layer with a GPU transform; the visible
+   tiles/chunks are re-picked and re-laid-out once the gesture pauses. */
+#layer { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; pointer-events: none; }
+#layer > * { position: absolute; left: 0; top: 0; }
+/* Explicit stacking: #raster's per-level z-index must stay inside #raster. */
+#preview { z-index: 0; }
+#raster { z-index: 1; }
+#vector { z-index: 2; }
+#grid { z-index: 3; }
+#labels { z-index: 4; }
+#raster img, #vector img, #preview { position: absolute; display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
+#raster img { image-rendering: auto; }
+#labels { width: 100%; height: 100%; overflow: visible; }
 .hud {
   position: fixed; z-index: 10; display: flex; gap: 8px; align-items: center;
   background: color-mix(in srgb, var(--panel) 88%, transparent);
@@ -42,6 +51,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   border-radius: 4px; padding: 4px 6px; font-size: 14px;
 }
 #zoomlabel { min-width: 52px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+#download[hidden] { display: none; }
 #coordtip {
   position: fixed; z-index: 15; display: none; pointer-events: none;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -54,21 +64,24 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   background: color-mix(in srgb, var(--bg) 75%, transparent); color: var(--muted); font-size: 15px;
 }
 #loading[hidden] { display: none; }
-#loading.over-preview { background: transparent; pointer-events: none; }
-#loading.over-preview > span {
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px;
-}
 #error { color: #f85149; }
 </style>
 </head>
 <body>
-<div id="stage"></div>
+<div id="stage">
+  <div id="layer">
+    <div id="raster"></div>
+    <div id="vector"></div>
+    <canvas id="grid"></canvas>
+    <svg id="labels" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
 
 <div class="hud" id="topbar">
   <a href="index.html">&larr; Region maps</a>
   <select id="region"></select>
   <span id="zoomlabel"></span>
+  <a id="download" hidden download>SVG &darr;</a>
 </div>
 
 <div class="hud" id="zoombar">
@@ -86,21 +99,43 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   "use strict";
   var REGIONS = ["7", "8", "9", "12", "13", "14", "17", "18", "19"];
   var MAX_DEPTH = 60;            // deepest zoom: fit-width / MAX_DEPTH
-  var MIN_FACTOR = 1.4, MAX_FACTOR = 1.6; // button zoom factor per click (eased)
   var REGION_SIDE = 7680;        // small-hex tiles per region side (odd-r lattice)
   var SUPER_SIDE = 2560;         // super-hex (terrain cell) grid per region side
   var SQRT3 = Math.sqrt(3);
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  // Rendering budget knobs.
+  var COMMIT_DELAY = 160;        // ms of gesture inactivity before re-picking tiles
+  var GRID_MIN_PX = 3;           // hex grid hidden while small hexes are narrower than this
+  var VECTOR_MIN_SCALE = 1.25;   // device px per canvas px above which vector chunks draw
+  var VECTOR_MAX_CHUNKS = 64;    // never draw more chunks than this at once
+  var BASE_LEVEL_DROP = 3;       // coarse fallback level under the sharp one (no flash while loading)
+
   var stage = document.getElementById("stage");
+  var layer = document.getElementById("layer");
+  var rasterEl = document.getElementById("raster");
+  var vectorEl = document.getElementById("vector");
+  var gridCanvas = document.getElementById("grid");
+  var labelsSvg = document.getElementById("labels");
   var loading = document.getElementById("loading");
   var loadingText = document.getElementById("loadingtext");
   var errorEl = document.getElementById("error");
   var zoomLabel = document.getElementById("zoomlabel");
+  var downloadEl = document.getElementById("download");
   var select = document.getElementById("region");
-  var svg = null, base = null;   // base = {x,y,w,h} fit view
-  var view = null;               // current {x,y,w,h} in viewBox units
-  var proj = null;               // {size,xOff,yOff} — mapgen Projection params (SVG data-* attrs)
-  var region = REGIONS.indexOf(String(new URLSearchParams(location.search).get("region") || "")) >= 0
-    ? new URLSearchParams(location.search).get("region") : REGIONS[0];
+
+  var man = null;                // manifest.json
+  var base = null;               // {x,y,w,h} fit view (whole canvas)
+  var view = null;               // current {x,y,w,h} in canvas units
+  var committed = null;          // view currently laid out in #layer
+  var proj = null;               // {size,xOff,yOff} — mapgen Projection params
+  var tiles = new Map();         // key → <img> currently in #raster
+  var chunks = new Map();        // key → <img> currently in #vector
+  var preview = null;            // low-res whole-region image until tiles arrive
+  var rafId = 0, commitTimer = 0;
+
+  var params = new URLSearchParams(location.search);
+  var region = REGIONS.indexOf(String(params.get("region") || "")) >= 0 ? params.get("region") : REGIONS[0];
 
   REGIONS.forEach(function (r) {
     var o = document.createElement("option");
@@ -112,49 +147,224 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     location.search = "?region=" + select.value;
   });
 
-  // --- rendering ------------------------------------------------------------
-  // Changing the viewBox forces a full redraw of the ~10 MB vector scene,
-  // which is very slow in some browsers (notably Firefox on Windows). While a
-  // gesture is in progress we only update a CSS transform that maps the last
-  // committed viewBox onto the current view (compositor-only, once per frame),
-  // and commit the real viewBox after COMMIT_DELAY ms of inactivity.
-  var COMMIT_DELAY = 160;
-  var GRID_MIN_PX = 3;           // hide hex-grid pattern while hexes are narrower than this on screen
-  var committed = null;          // viewBox currently rasterized
-  var grid = null;               // full-canvas hex-grid pattern rect (most expensive layer)
-  var rafId = 0, commitTimer = 0;
+  function dir() { return "region-" + region + "/"; }
+  function bust(url) { return url + "?v=" + encodeURIComponent(man.version); }
 
-  // meet-fit scale + letterbox offsets for a viewBox in the current stage
+  // --- view math ------------------------------------------------------------
+
+  // meet-fit scale + letterbox offsets for a view in the current stage
   function layout(v) {
     var rect = stage.getBoundingClientRect();
     var s = Math.min(rect.width / v.w, rect.height / v.h);
-    return { s: s, ox: (rect.width - v.w * s) / 2, oy: (rect.height - v.h * s) / 2 };
+    return { s: s, ox: (rect.width - v.w * s) / 2, oy: (rect.height - v.h * s) / 2, sw: rect.width, sh: rect.height };
   }
+
+  // map a screen point (relative to stage) to canvas coords
+  function toWorld(px, py) {
+    var L = layout(view);
+    return { x: view.x + (px - L.ox) / L.s, y: view.y + (py - L.oy) / L.s, s: L.s };
+  }
+
+  // --- gesture preview (compositor-only) --------------------------------------
 
   function render() {
     rafId = 0;
-    if (!svg || !view || !committed) return;
+    if (!view || !committed) return;
     var c = layout(committed), v = layout(view), k = v.s / c.s;
     var tx = v.ox + (committed.x - view.x) * v.s - c.ox * k;
     var ty = v.oy + (committed.y - view.y) * v.s - c.oy * k;
-    svg.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + k + ")";
+    layer.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + k + ")";
+  }
+
+  // --- commit: pick + lay out what is visible --------------------------------
+
+  function place(el, L, x, y, w, h) {
+    // Round both edges (not origin + size) so neighbouring tiles share a pixel
+    // boundary exactly — no hairline seams.
+    var l = Math.round(L.ox + (x - view.x) * L.s), t = Math.round(L.oy + (y - view.y) * L.s);
+    var r = Math.round(L.ox + (x + w - view.x) * L.s), b = Math.round(L.oy + (y + h - view.y) * L.s);
+    el.style.left = l + "px"; el.style.top = t + "px";
+    el.style.width = (r - l) + "px"; el.style.height = (b - t) + "px";
+  }
+
+  // visible canvas rect (whole stage, letterbox included), with a margin
+  function visibleRect(L, marginPx) {
+    var m = (marginPx || 0) / L.s;
+    return {
+      x0: view.x - L.ox / L.s - m, y0: view.y - L.oy / L.s - m,
+      x1: view.x + (L.sw - L.ox) / L.s + m, y1: view.y + (L.sh - L.oy) / L.s + m
+    };
+  }
+
+  function sync(map, parent, want) {
+    map.forEach(function (el, key) {
+      if (!want.has(key)) { el.remove(); map.delete(key); }
+    });
+  }
+
+  function addTiles(L, vis, z, want, zIndex) {
+    var k = Math.pow(2, z - man.maxZoom);
+    var T = man.tileSize / k;                    // canvas units per tile
+    var nx = Math.ceil(man.width * k / man.tileSize), ny = Math.ceil(man.height * k / man.tileSize);
+    var ix0 = Math.max(0, Math.floor(vis.x0 / T)), ix1 = Math.min(nx - 1, Math.floor(vis.x1 / T));
+    var iy0 = Math.max(0, Math.floor(vis.y0 / T)), iy1 = Math.min(ny - 1, Math.floor(vis.y1 / T));
+    for (var iy = iy0; iy <= iy1; iy++) {
+      for (var ix = ix0; ix <= ix1; ix++) {
+        var key = z + "/" + ix + "_" + iy;
+        want.add(key);
+        var img = tiles.get(key);
+        if (!img) {
+          img = new Image();
+          img.alt = "";
+          img.decoding = "async";
+          img.draggable = false;
+          img.src = bust(dir() + "tiles/" + key + ".png");
+          tiles.set(key, img);
+          rasterEl.appendChild(img);
+        }
+        img.style.zIndex = zIndex;
+        place(img, L, ix * T, iy * T, T, T);
+      }
+    }
+  }
+
+  function layoutRaster(L, vis) {
+    var dpr = window.devicePixelRatio || 1;
+    // Sharpest level we need: tile px per canvas unit ≥ device px per canvas unit.
+    var z = Math.ceil(man.maxZoom + Math.log2(L.s * dpr));
+    z = Math.max(0, Math.min(man.maxZoom, z));
+    var zb = Math.max(0, z - BASE_LEVEL_DROP);
+    var want = new Set();
+    if (zb !== z) addTiles(L, vis, zb, want, 0);
+    addTiles(L, vis, z, want, 1);
+    sync(tiles, rasterEl, want);
+  }
+
+  function layoutVector(L, vis) {
+    var dpr = window.devicePixelRatio || 1;
+    var want = new Set();
+    if (L.s * dpr >= VECTOR_MIN_SCALE) {
+      var hits = [];
+      for (var i = 0; i < man.chunks.length; i++) {
+        var c = man.chunks[i];   // [cx, cz, x, y, w, h]
+        if (c[2] + c[4] < vis.x0 || c[2] > vis.x1 || c[3] + c[5] < vis.y0 || c[3] > vis.y1) continue;
+        hits.push(c);
+      }
+      if (hits.length <= VECTOR_MAX_CHUNKS) {
+        hits.forEach(function (c) {
+          var key = c[0] + "_" + c[1];
+          want.add(key);
+          var img = chunks.get(key);
+          if (!img) {
+            img = new Image();
+            img.alt = "";
+            img.decoding = "async";
+            img.draggable = false;
+            img.src = bust(dir() + "vec/" + key + ".svg");
+            chunks.set(key, img);
+            vectorEl.appendChild(img);
+          }
+          place(img, L, c[2], c[3], c[4], c[5]);
+        });
+      }
+    }
+    sync(chunks, vectorEl, want);
+  }
+
+  // Super-hex outline lattice (the full SVG's hexgrid pattern), only for the
+  // visible area: each hex strokes 3 of its 6 edges, which covers every edge
+  // of the tiling exactly once.
+  function drawGrid(L, vis) {
+    var dpr = window.devicePixelRatio || 1;
+    var cw = Math.round(L.sw * dpr), ch = Math.round(L.sh * dpr);
+    if (gridCanvas.width !== cw || gridCanvas.height !== ch) {
+      gridCanvas.width = cw; gridCanvas.height = ch;
+      gridCanvas.style.width = L.sw + "px"; gridCanvas.style.height = L.sh + "px";
+    }
+    var g = gridCanvas.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    if (SQRT3 * proj.size * L.s < GRID_MIN_PX) return;
+    var R = proj.size * 3;                      // super-hex radius, canvas units
+    var a = pixelToTile(vis.x0, vis.y1, 3), b = pixelToTile(vis.x1, vis.y0, 3);
+    var sz0 = Math.min(a.z, b.z) - 1, sz1 = Math.max(a.z, b.z) + 1;
+    var sx0 = Math.min(a.x, b.x) - 1, sx1 = Math.max(a.x, b.x) + 1;
+    var k = L.s * dpr;
+    g.setTransform(k, 0, 0, k, (L.ox - view.x * L.s) * dpr, (L.oy - view.y * L.s) * dpr);
+    g.lineWidth = 0.48;
+    g.strokeStyle = "rgba(16,20,24," + (0.85 * 0.32) + ")";
+    // corner offsets for corners at -30°, 30°, 90°, 150° (edges 0..2)
+    var dx = [], dy = [];
+    [-30, 30, 90, 150].forEach(function (deg) {
+      var t = deg * Math.PI / 180;
+      dx.push(R * Math.cos(t)); dy.push(R * Math.sin(t));
+    });
+    g.beginPath();
+    for (var sz = sz0; sz <= sz1; sz++) {
+      var shift = SQRT3 * R * ((sz & 1) ? 0.5 : 0);
+      var cy = proj.yOff - 1.5 * R * sz;
+      for (var sx = sx0; sx <= sx1; sx++) {
+        // odd-r offset → axial → canvas center (+z north is up)
+        var cx = proj.xOff + SQRT3 * R * sx + shift;
+        g.moveTo(cx + dx[0], cy + dy[0]);
+        g.lineTo(cx + dx[1], cy + dy[1]);
+        g.lineTo(cx + dx[2], cy + dy[2]);
+        g.lineTo(cx + dx[3], cy + dy[3]);
+      }
+    }
+    g.stroke();
+  }
+
+  function buildLabels() {
+    labelsSvg.textContent = "";
+    var frag = document.createDocumentFragment();
+    (man.labels || []).forEach(function (l) {
+      // [anchorX, baselineY, plateX, plateY, plateW, plateH, fontPx, text]
+      var rect = document.createElementNS(SVGNS, "rect");
+      rect.setAttribute("x", l[2]); rect.setAttribute("y", l[3]);
+      rect.setAttribute("width", l[4]); rect.setAttribute("height", l[5]);
+      rect.setAttribute("rx", Math.max(2, l[6] * 0.3));
+      rect.setAttribute("fill", "#101418"); rect.setAttribute("fill-opacity", "0.55");
+      var text = document.createElementNS(SVGNS, "text");
+      text.setAttribute("x", l[0]); text.setAttribute("y", l[1]);
+      text.setAttribute("font-family", "DejaVu Sans, Verdana, sans-serif");
+      text.setAttribute("font-size", l[6]);
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("fill", "#ffffff");
+      text.setAttribute("stroke", "#101418");
+      text.setAttribute("stroke-width", Math.max(1.5, l[6] / 8));
+      text.setAttribute("stroke-linejoin", "round");
+      text.setAttribute("paint-order", "stroke");
+      text.textContent = l[7];
+      frag.appendChild(rect); frag.appendChild(text);
+    });
+    labelsSvg.appendChild(frag);
   }
 
   function commit() {
     clearTimeout(commitTimer); commitTimer = 0;
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-    if (!svg || !view) return;
+    if (!man || !view) return;
     committed = { x: view.x, y: view.y, w: view.w, h: view.h };
-    if (grid) {
-      var hexPx = SQRT3 * proj.size * layout(view).s;
-      grid.style.display = hexPx >= GRID_MIN_PX ? "" : "none";
+    var L = layout(view);
+    var vis = visibleRect(L, 0);
+    layoutRaster(L, visibleRect(L, 64));
+    layoutVector(L, visibleRect(L, 32));
+    drawGrid(L, vis);
+    labelsSvg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
+    labelsSvg.style.width = L.sw + "px"; labelsSvg.style.height = L.sh + "px";
+    if (preview) {
+      // Only while zoomed out: an <img> blown up to tens of thousands of px
+      // is itself slow in some browsers, and the coarse tile level covers it.
+      var showPreview = man.width * L.s <= 8192;
+      preview.style.display = showPreview ? "" : "none";
+      if (showPreview) place(preview, L, 0, 0, man.width, man.height);
     }
-    svg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
-    svg.style.transform = "";
+    layer.style.transform = "";
   }
 
   function apply(immediate) {
-    if (!svg || !view) return;
+    if (!man || !view) return;
     var depth = base.w / view.w;   // 1 = fit, MAX_DEPTH = deepest
     zoomLabel.textContent = Math.round(depth * 100) + "%";
     document.getElementById("zoom-in").disabled = depth >= MAX_DEPTH - 0.01;
@@ -171,26 +381,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     apply(true);
   }
 
-  window.addEventListener("resize", function () { if (svg && view) commit(); });
-
-  function fitSize() {           // visible viewBox size when fully zoomed out
-    return { w: base.w, h: base.h };  // NOT svg.viewBox — apply() mutates it on every zoom
-  }
-
-  // map a screen point (relative to stage) to viewBox coords
-  function toWorld(px, py) {
-    var rect = stage.getBoundingClientRect();
-    var vb = svg.viewBox.baseVal;
-    var s = Math.min(rect.width / view.w, rect.height / view.h);
-    var ox = (rect.width - view.w * s) / 2, oy = (rect.height - view.h * s) / 2;
-    return { x: view.x + (px - ox) / s, y: view.y + (py - oy) / s, s: s };
-  }
+  window.addEventListener("resize", function () { if (view) commit(); });
 
   function zoomAt(px, py, factor) {
-    var rect = stage.getBoundingClientRect();
-    var min = fitSize();
-    var minW = min.w / MAX_DEPTH;
-    var maxW = min.w;
+    if (!view) return;
+    var minW = base.w / MAX_DEPTH, maxW = base.w;
     var p = toWorld(px, py);
     var nw = Math.min(maxW, Math.max(minW, view.w / factor));
     var k = nw / view.w;
@@ -222,16 +417,15 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
     stage.setPointerCapture(e.pointerId);
   });
   stage.addEventListener("pointermove", function (e) {
-    if (!drag || !svg) return;
-    var rect = stage.getBoundingClientRect();
-    var s = Math.min(rect.width / view.w, rect.height / view.h);
+    if (!drag || !view) return;
+    var s = layout(view).s;
     view.x -= (e.clientX - drag.x) / s;
     view.y -= (e.clientY - drag.y) / s;
     drag = { x: e.clientX, y: e.clientY };
     apply();
   });
   stage.addEventListener("pointerup", function () {
-    if (drag && svg) commit();
+    if (drag && view) commit();
     drag = null; stage.classList.remove("panning");
   });
   stage.addEventListener("pointercancel", function () { drag = null; stage.classList.remove("panning"); });
@@ -259,13 +453,6 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   }
   var origin = regionOrigin(region);
 
-  // mapgen's Production-batch projection (px-per-tile 3, 8 px margin) —
-  // fallback for SVGs rendered before data-hex-size/-x-off/-y-off existed.
-  function defaultProj() {
-    var size = 3 / SQRT3;
-    return { size: size, xOff: size + 8, yOff: size + 8 + 1.5 * size * (REGION_SIDE - 1) };
-  }
-
   // canvas px → nearest odd-r tile (port of mapgen Projection::pixel_to_hex).
   // `scale` 3 inverts onto the super-hex (terrain-cell) lattice instead.
   function pixelToTile(px, py, scale) {
@@ -285,7 +472,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   var tip = document.getElementById("coordtip");
 
   stage.addEventListener("pointermove", function (e) {
-    if (!svg || !view || !proj || e.pointerType === "touch") return;
+    if (!view || !proj || e.pointerType === "touch") return;
     var rect = stage.getBoundingClientRect();
     var p = toWorld(e.clientX - rect.left, e.clientY - rect.top);
     // Gate on the DRAWN super-hex (terrain cell), not the small tile: edge
@@ -310,56 +497,46 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   });
   stage.addEventListener("pointerleave", function () { tip.style.display = "none"; });
 
+  // --- load -----------------------------------------------------------------
+
   function fail(msg) {
+    loading.hidden = false;
     loadingText.hidden = true;
     errorEl.hidden = false;
     errorEl.textContent = msg;
   }
 
-  function load(r) {
-    loading.hidden = false;
-    loadingText.hidden = false;
-    errorEl.hidden = true;
-    loadingText.textContent = "Loading region " + r + " (~8\u201313 MB, may take a few seconds)\u2026";
-    svg = null; base = null; view = null; proj = null; committed = null; grid = null;
-    // Low-res preview (same canvas extent/aspect as the SVG) while the SVG loads.
-    stage.innerHTML = "";
-    var preview = new Image();
-    preview.id = "preview";
-    preview.alt = "";
-    preview.onload = function () { if (!svg) loading.classList.add("over-preview"); };
-    preview.src = "region-" + r + "-preview.png";
-    stage.appendChild(preview);
-    fetch("region-" + r + ".svg", { cache: "no-cache" })
-      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.text(); })
-      .then(function (text) {
-        var doc = new DOMParser().parseFromString(text, "image/svg+xml");
-        var root = doc.documentElement;
-        if (!root || root.nodeName === "parsererror") throw new Error("failed to parse SVG");
-        root.removeAttribute("width");
-        root.removeAttribute("height");
-        stage.innerHTML = "";
-        svg = document.importNode(root, true);
-        stage.appendChild(svg);
-        proj = {
-          size: parseFloat(svg.getAttribute("data-hex-size")),
-          xOff: parseFloat(svg.getAttribute("data-x-off")),
-          yOff: parseFloat(svg.getAttribute("data-y-off"))
-        };
-        if (!isFinite(proj.size) || proj.size <= 0 ||
-            !isFinite(proj.xOff) || !isFinite(proj.yOff)) proj = defaultProj();
-        grid = svg.querySelector('rect[fill="url(#hexgrid)"]');
-        var vb = svg.viewBox.baseVal;
-        base = { x: vb.x, y: vb.y, w: vb.width, h: vb.height };
+  function fmtMiB(b) { return (b / 1048576).toFixed(1) + " MB"; }
+
+  function load() {
+    loadingText.textContent = "Loading region " + region + "…";
+    fetch(dir() + "manifest.json", { cache: "no-cache" })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+      .then(function (m) {
+        man = m;
+        proj = { size: m.hexSize, xOff: m.xOff, yOff: m.yOff };
+        base = { x: 0, y: 0, w: m.width, h: m.height };
+        if (m.svg) {
+          downloadEl.href = m.svg;
+          downloadEl.title = "Download the full vector map (" + fmtMiB(m.svgBytes || 0) + ")";
+          downloadEl.hidden = false;
+        }
+        // Whole-region preview under the tiles: instant first paint, and it
+        // backs any tile that has not arrived yet at far-out zooms.
+        preview = new Image();
+        preview.id = "preview";
+        preview.alt = "";
+        preview.src = "region-" + region + "-preview.png";
+        rasterEl.parentNode.insertBefore(preview, rasterEl);
+        buildLabels();
         fit();
         loading.hidden = true;
-        loading.classList.remove("over-preview");
       })
-      .catch(function (err) { fail("Could not load region-" + r + ".svg \u2014 " + err.message); });
+      .catch(function (err) { fail("Could not load region " + region + " tiles — " + err.message); });
   }
 
-  document.title = "Region " + region + " map \u2014 relay.bitcraftsync.app";
-  load(region);
+  document.title = "Region " + region + " map — relay.bitcraftsync.app";
+  load();
 })();
 </script>
 </body>
